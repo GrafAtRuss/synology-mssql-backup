@@ -143,7 +143,109 @@ def smart_keep(files):
             chosen.append(path)
     return chosen
 
+def smb_put(unc, user, password, local, filename):
+    host, share, subs = parse_unc(unc)
+    remote = "/".join(subs + [filename]) if subs else filename
+    smb = None
+    for cand in ("/usr/bin/smbclient", "/bin/smbclient", "smbclient"):
+        if cand == "smbclient" or os.path.isfile(cand):
+            smb = cand
+            break
+    if not smb:
+        raise RuntimeError("smbclient не найден в DSM")
+    auth = "%s%%%s" % (user, password) if user else "%"
+    cmd = [smb, "//%s/%s" % (host, share), "-U", auth, "-c", 'put "%s" "%s"' % (local, remote)]
+    log("smbclient put %s -> //%s/%s/%s" % (os.path.basename(local), host, share, remote))
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, env=dict(os.environ, HOME=VAR, USERPROFILE=VAR))
+    if p.returncode != 0:
+        raise RuntimeError((p.stderr or p.stdout or "smbclient error").strip()[:800])
+
+def sql_exec(host, port, user, password, query, timeout=7200):
+    sqlcmd = sqlcmd_bin()
+    if not sqlcmd:
+        raise RuntimeError("sqlcmd не найден в пакете")
+    cmd = [sqlcmd, "-S", "%s,%s" % (host, port), "-U", user, "-P", password,
+           "-C", "-l", "30", "-b", "-s", "|", "-W", "-h", "-1", "-y", "0", "-Q", query]
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=dict(os.environ, HOME=VAR, USERPROFILE=VAR))
+    out = ((p.stdout or "") + "\n" + (p.stderr or "")).strip()
+    return p.returncode, out
+
+def parse_filelist(text):
+    rows = []
+    for line in (text or "").splitlines():
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) < 3:
+            continue
+        kind = parts[2].upper()
+        if kind not in ("D", "L"):
+            continue
+        logical = parts[0]
+        if not logical or logical.lower() == "logicalname":
+            continue
+        rows.append((logical, kind))
+    return rows
+
+def restore_job(job):
+    bak = os.path.realpath(job.get("bak") or "")
+    if not bak.startswith("/volume") or not bak.lower().endswith(".bak") or not os.path.isfile(bak):
+        raise RuntimeError("файл копии недоступен")
+    host = job.get("host") or ""
+    port = str(job.get("port") or "1433")
+    user = job.get("user") or ""
+    password = job.get("pass") or ""
+    dbname = job.get("dbname") or ""
+    sql_dir = (job.get("sql_dir") or r"C:\SQLBackups").rstrip("\\/")
+    ident = sql_ident(dbname)
+    filename = os.path.basename(bak)
+    log("=== Восстановление %s на %s ===" % (filename, host))
+    smb_put(job.get("smb_share") or "", job.get("smb_user") or "", job.get("smb_pass") or "", bak, filename)
+    remote = win_join(sql_dir, filename)
+    code, out = sql_exec(host, port, user, password,
+                         "RESTORE FILELISTONLY FROM DISK = N'%s'" % remote.replace("'", "''"), timeout=600)
+    log(out[-1500:] if out else "FILELISTONLY без вывода")
+    if code != 0:
+        raise RuntimeError("FILELISTONLY завершился с кодом %s" % code)
+    files = parse_filelist(out)
+    if not files:
+        raise RuntimeError("Не удалось прочитать состав копии")
+    moves = []
+    data_i = 0
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", dbname) or "db"
+    for logical, kind in files:
+        if kind == "L":
+            ext = "_log.ldf"
+        elif data_i == 0:
+            ext = ".mdf"
+            data_i += 1
+        else:
+            ext = "_%d.ndf" % data_i
+            data_i += 1
+        dest = sql_dir + "\\" + safe + ext
+        moves.append("MOVE N'%s' TO N'%s'" % (logical.replace("'", "''"), dest.replace("'", "''")))
+    disk = remote.replace("'", "''")
+    batch = (
+        "IF DB_ID(N'%s') IS NOT NULL ALTER DATABASE [%s] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
+        "RESTORE DATABASE [%s] FROM DISK = N'%s' WITH %s, REPLACE, STATS = 10; "
+        "IF DB_ID(N'%s') IS NOT NULL ALTER DATABASE [%s] SET MULTI_USER;"
+    ) % (ident.replace("'", "''"), ident, ident, disk, ", ".join(moves), ident.replace("'", "''"), ident)
+    log("RESTORE DATABASE [%s]" % ident)
+    code, out = sql_exec(host, port, user, password, batch, timeout=7200)
+    if out:
+        log(out[-2000:])
+    if code != 0:
+        raise RuntimeError("RESTORE завершился с кодом %s" % code)
+    log("Восстановление завершено: %s на %s" % (dbname, host))
+
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--restore":
+        try:
+            with open(sys.argv[2], encoding="utf-8") as f:
+                job = json.load(f)
+            restore_job(job)
+            return 0
+        except Exception as e:
+            log("Ошибка восстановления: %s" % e)
+            return 1
     only = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
         with open(TASKS, encoding="utf-8") as f:

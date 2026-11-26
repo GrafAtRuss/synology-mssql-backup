@@ -1,5 +1,5 @@
 package="MSSQLBackup"
-version="1.15.0-0001"
+version="1.16.0-0001"
 os_min_ver="7.2-60000"
 displayname="MSSQL Backup"
 description="Резервное копирование баз Microsoft SQL Server на NAS. Автор: Ермаков Алексей Сергеевич (ИП Ермаков А.С.)"

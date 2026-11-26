@@ -70,6 +70,31 @@ def browse(path):
             items.append({"name": name, "path": full})
     return {"path": path, "parent": parent, "items": items}
 
+def list_baks(path):
+    path = path or "/"
+    if path in ("", "/"):
+        return {"path": "/", "files": []}
+    path = os.path.realpath(path)
+    if not path.startswith("/volume"):
+        return {"path": path, "files": [], "error": "Можно выбирать только файлы на томах"}
+    if not os.path.isdir(path):
+        return {"path": path, "files": [], "error": "Папка не найдена"}
+    files = []
+    try:
+        names = os.listdir(path)
+    except OSError as e:
+        return {"path": path, "files": [], "error": "Нет доступа: %s" % e}
+    for name in names:
+        if not name.lower().endswith(".bak"):
+            continue
+        full = os.path.join(path, name)
+        if not os.path.isfile(full):
+            continue
+        st = os.stat(full)
+        files.append({"name": name, "path": full, "size": st.st_size, "mtime": int(st.st_mtime)})
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return {"path": path, "files": files}
+
 def js_day(now):
     return (now.weekday() + 1) % 7
 
@@ -214,6 +239,11 @@ class H(BaseHTTPRequestHandler):
             raw = (q.get("path") or ["/"])[0]
             self._send(200, browse(raw))
             return
+        if path == "/api/files":
+            q = parse_qs(urlparse(self.path).query)
+            raw = (q.get("path") or ["/"])[0]
+            self._send(200, list_baks(raw))
+            return
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -259,6 +289,20 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, {"ok": p.returncode == 0, "msg": msg})
             except Exception as e:
                 self._send(200, {"ok": False, "msg": str(e)})
+            return
+        if path == "/api/restore":
+            bak = os.path.realpath(data.get("bak") or "")
+            if not bak.startswith("/volume") or not bak.lower().endswith(".bak") or not os.path.isfile(bak):
+                self._send(200, {"ok": False, "msg": "Выберите файл .bak на томе NAS"})
+                return
+            if not (data.get("host") and data.get("user") and data.get("dbname") and data.get("smb_share") and data.get("sql_dir")):
+                self._send(200, {"ok": False, "msg": "Заполните сервер, имя базы, папку SQL и SMB-шару"})
+                return
+            req = os.path.join(VAR, "restore-%s.json" % int(time.time()))
+            with open(req, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            subprocess.Popen(["/usr/bin/python3", os.path.join(TARGET, "bin/backup.py"), "--restore", req], env=sql_env())
+            self._send(200, {"ok": True, "msg": "Восстановление запущено. Ход — в журнале задачи."})
             return
         self._send(404, {"error": "not found"})
 

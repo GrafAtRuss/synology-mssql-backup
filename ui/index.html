@@ -84,6 +84,8 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
   <aside class="side">
     <div class="tb">
       <button class="primary" title="Создать" onclick="openWiz()">+</button>
+      <button title="Восстановить на другой сервер" onclick="openRestore()">&#8617;</button>
+      <button title="Удалить задачу" onclick="deleteTask()">&#10005;</button>
       <button title="Обновить" onclick="reloadAll()">&#8635;</button>
       <button title="Проверить sqlcmd" onclick="installSql()">&#8681;</button>
     </div>
@@ -179,6 +181,42 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
   </div>
 </div>
 
+<div class="mask" id="rmask">
+  <div class="wiz">
+    <h2><span id="rTitle">Восстановление</span><button onclick="closeRestore()">×</button></h2>
+    <div class="inner">
+      <div class="step on" id="r1">
+        <div class="tree">
+          <div class="tree-head"><span class="naspath" id="rPath">Копии</span></div>
+          <div class="tree-body" id="rList"></div>
+        </div>
+        <div class="hint">Файл .bak с NAS будет передан на другой SQL Server по SMB и восстановлен с локального диска этого сервера.</div>
+      </div>
+      <div class="step" id="r2">
+        <label>Хост другого SQL Server</label><input id="r_host" placeholder="192.168.1.20">
+        <label>Порт</label><input id="r_port" value="1433">
+        <label>Пользователь</label><input id="r_user">
+        <label>Пароль</label><input id="r_pass" type="password">
+        <div style="margin-top:12px"><button class="btn sec" type="button" onclick="testRestore()">Проверить подключение</button></div>
+        <div id="rConn" class="hint"></div>
+      </div>
+      <div class="step" id="r3">
+        <label>Имя базы на этом сервере</label><input id="r_db" placeholder="contracts">
+        <label>Папка на целевом SQL Server</label><input id="r_sql" value="C:\SQLBackups">
+        <div class="hint">Сюда кладётся .bak и файлы базы. Служба SQL должна иметь права на папку.</div>
+        <label>SMB-шара этой папки</label><input id="r_share" placeholder="\\192.168.1.20\SQLBackups">
+        <label>Пользователь SMB</label><input id="r_suser">
+        <label>Пароль SMB</label><input id="r_spass" type="password">
+        <div id="rMsg" class="hint"></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn sec" type="button" onclick="rPrev()">Назад</button>
+      <button class="btn" type="button" id="rNext" onclick="rNext()">Далее</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = location.protocol + "//" + location.hostname + ":8088";
 let tasks = [];
@@ -223,7 +261,7 @@ function showTask(id){
   document.getElementById("main").innerHTML =
     '<div class="banner"><div class="badge">&#128337;</div><div style="flex:1"><b>'+esc(t.name||"Задача")+'</b>'+
     '<div class="hint">Последний запуск смотрите в журнале. SQL пишет файл локально, NAS забирает его по SMB.</div>'+
-    '<div style="margin-top:10px"><button class="btn" onclick="runNow(\''+esc(t.id)+'\')">Резервировать сейчас</button></div></div></div>'+
+    '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="runNow(\''+esc(t.id)+'\')">Резервировать сейчас</button><button class="btn sec" onclick="openRestore()">Восстановить</button><button class="btn sec" onclick="deleteTask()">Удалить</button></div></div></div>'+
     '<div class="grid"><div class="card"><h3>Источник</h3><div class="pad kv"><div>Хост</div><div>'+esc(t.host)+':'+esc(t.port)+'</div><div>Базы</div><div>'+esc((t.dbs||[]).join(", ")||"—")+'</div><div>Папка SQL</div><div>'+esc(t.sql_dir)+'</div></div></div>'+
     '<div class="card"><h3>Назначение</h3><div class="pad kv"><div>SMB</div><div>'+esc(t.smb_share||"—")+'</div><div>Папка NAS</div><div>'+esc(t.nas_dir)+'</div><div>Ротация</div><div>'+esc(rotText(t))+'</div><div>Расписание</div><div>'+esc(schedText(t))+'</div></div></div></div>'+
     '<pre class="log" id="log">Загрузка журнала…</pre>';
@@ -409,6 +447,114 @@ async function saveTask(){
   } catch(e) {
     msg.className="err"; msg.textContent = e.message;
   }
+}
+
+async function deleteTask(){
+  if (!selected) { alert("Сначала выберите задачу"); return; }
+  const t = tasks.find(x => x.id===selected);
+  if (!confirm("Удалить задачу «" + ((t && t.name) || "") + "»? Файлы .bak на NAS останутся.")) return;
+  try {
+    const all = tasks.filter(x => x.id !== selected);
+    await api("/api/tasks", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({tasks: all})});
+    selected = null;
+    await reloadAll();
+    document.getElementById("main").innerHTML = '<div class="banner"><div class="badge">&#128190;</div><div><b>Задача удалена</b><div class="hint">Файлы копий на NAS не трогались.</div></div></div>';
+  } catch(e) { alert(e.message); }
+}
+let rstep = 1;
+function closeRestore(){ document.getElementById("rmask").classList.remove("on"); }
+function showRStep(){
+  for (let i=1;i<=3;i++) document.getElementById("r"+i).classList.toggle("on", i===rstep);
+  const titles=["Выбор копии","Другой сервер","База и папка"];
+  document.getElementById("rTitle").textContent = "Восстановление — " + titles[rstep-1];
+  document.getElementById("rNext").textContent = rstep===3 ? "Восстановить" : "Далее";
+}
+function openRestore(){
+  rstep = 1;
+  ["r_host","r_user","r_pass","r_db","r_share","r_suser","r_spass"].forEach(id => document.getElementById(id).value="");
+  document.getElementById("r_port").value="1433";
+  document.getElementById("r_sql").value="C:\\SQLBackups";
+  document.getElementById("rConn").textContent="";
+  document.getElementById("rConn").className="hint";
+  document.getElementById("rMsg").textContent="";
+  document.getElementById("rMsg").className="hint";
+  showRStep();
+  document.getElementById("rmask").classList.add("on");
+  const t = tasks.find(x => x.id===selected);
+  loadRestoreDir(t && t.nas_dir ? t.nas_dir : "/");
+}
+function fmtSize(n){
+  if (n > 1048576) return (n/1048576).toFixed(1) + " МБ";
+  if (n > 1024) return Math.round(n/1024) + " КБ";
+  return n + " Б";
+}
+function guessDb(name){
+  return String(name||"").replace(/\.bak$/i,"").replace(/_\d{8}_\d{6}$/,"");
+}
+async function loadRestoreDir(path){
+  const box = document.getElementById("rList");
+  box.innerHTML = '<div class="hint" style="padding:10px 12px">Загрузка…</div>';
+  try {
+    const d = await api("/api/browse?path="+encodeURIComponent(path||"/"));
+    const f = await api("/api/files?path="+encodeURIComponent(d.path||path||"/"));
+    document.getElementById("rPath").textContent = (!d.path || d.path==="/") ? "Общие папки" : d.path;
+    let html = "";
+    if (d.parent) html += '<div class="frow" onclick=\'loadRestoreDir('+JSON.stringify(d.parent)+')\'><span class="fico"></span><span>Наверх</span></div>';
+    (d.items||[]).forEach(it => {
+      html += '<div class="frow" onclick=\'loadRestoreDir('+JSON.stringify(it.path)+')\'><span class="fico"></span><span class="dbname">'+esc(it.name)+'</span><span class="open">›</span></div>';
+    });
+    (f.files||[]).forEach(file => {
+      const when = new Date(file.mtime*1000).toLocaleString();
+      html += '<label class="dbrow"><input type="radio" name="rbak" value="'+esc(file.path)+'" onchange="document.getElementById(\'r_db\').value=guessDb('+JSON.stringify(file.name)+')"><span class="dbname">'+esc(file.name)+'</span><span class="dbcount">'+esc(fmtSize(file.size))+' · '+esc(when)+'</span></label>';
+    });
+    if (f.error) html += '<div class="err" style="padding:8px 12px">'+esc(f.error)+'</div>';
+    if (!html) html = '<div class="hint" style="padding:10px 12px">В этой папке нет копий .bak</div>';
+    box.innerHTML = html;
+  } catch(e) {
+    box.innerHTML = '<div class="err" style="padding:8px 12px">'+esc(e.message)+'</div>';
+  }
+}
+function rPrev(){ if(rstep>1){ rstep--; showRStep(); } else closeRestore(); }
+function rNext(){ if(rstep<3){ rstep++; showRStep(); } else startRestore(); }
+async function testRestore(){
+  const msg = document.getElementById("rConn");
+  msg.className="hint"; msg.textContent="Подключение…";
+  try {
+    const d = await api("/api/list_dbs", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      host: document.getElementById("r_host").value,
+      port: document.getElementById("r_port").value,
+      user: document.getElementById("r_user").value,
+      pass: document.getElementById("r_pass").value
+    })});
+    if (d.error){ msg.className="err"; msg.textContent=d.error; return; }
+    msg.className="hint"; msg.textContent="Сервер доступен. Баз: " + (d.dbs||[]).length;
+  } catch(e) { msg.className="err"; msg.textContent=e.message; }
+}
+async function startRestore(){
+  const msg = document.getElementById("rMsg");
+  const picked = document.querySelector('input[name=rbak]:checked');
+  if (!picked) { rstep=1; showRStep(); alert("Выберите файл .bak"); return; }
+  const db = document.getElementById("r_db").value.trim();
+  if (!db) { msg.className="err"; msg.textContent="Укажите имя базы"; return; }
+  msg.className="hint"; msg.textContent="Запуск…";
+  try {
+    const d = await api("/api/restore", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
+      bak: picked.value,
+      host: document.getElementById("r_host").value,
+      port: document.getElementById("r_port").value,
+      user: document.getElementById("r_user").value,
+      pass: document.getElementById("r_pass").value,
+      dbname: db,
+      sql_dir: document.getElementById("r_sql").value,
+      smb_share: document.getElementById("r_share").value,
+      smb_user: document.getElementById("r_suser").value,
+      smb_pass: document.getElementById("r_spass").value
+    })});
+    if (!d.ok) { msg.className="err"; msg.textContent=d.msg||"Ошибка"; return; }
+    closeRestore();
+    alert(d.msg || "Запущено");
+    if (selected) showTask(selected);
+  } catch(e) { msg.className="err"; msg.textContent=e.message; }
 }
 
 async function runNow(id){

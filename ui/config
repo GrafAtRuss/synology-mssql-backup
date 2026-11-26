@@ -2,7 +2,7 @@
     "Main.js": {
         "SYNO.SDS.MSSQLBackup.Instance": {
             "type": "app",
-            "version": "1.15.0",
+            "version": "1.16.0",
             "title": "MSSQL Backup",
             "desc": "Резервное копирование MSSQL",
             "icon": "images/icon_{0}.png",

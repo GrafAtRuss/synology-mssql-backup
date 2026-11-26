@@ -71,13 +71,17 @@ def backup_one(task, db):
         log("Папку %s заранее создать не удалось: %s" % (sql_dir, (out or "")[-400:]))
     else:
         log("Папка на SQL Server готова: %s" % sql_dir.rstrip("\\/"))
-    query = "BACKUP DATABASE [%s] TO DISK = N'%s' WITH INIT, STATS = 10" % (ident, remote.replace("'", "''"))
+    query_plain = "BACKUP DATABASE [%s] TO DISK = N'%s' WITH INIT, STATS = 10" % (ident, remote.replace("'", "''"))
+    query_comp = "BACKUP DATABASE [%s] TO DISK = N'%s' WITH INIT, COMPRESSION, STATS = 10" % (ident, remote.replace("'", "''"))
     sqlcmd = sqlcmd_bin()
     if not sqlcmd:
         raise RuntimeError("sqlcmd не найден в пакете")
     log("BACKUP %s -> %s" % (db, remote))
-    cmd = [sqlcmd, "-S", "%s,%s" % (host, port), "-U", user, "-P", password, "-C", "-l", "30", "-b", "-Q", query]
-    rc, out = run_logged(cmd, 7200)
+    cmd = [sqlcmd, "-S", "%s,%s" % (host, port), "-U", user, "-P", password, "-C", "-l", "30", "-b", "-Q"]
+    rc, out = run_logged(cmd + [query_comp], 7200)
+    if rc != 0 and ("1844" in (out or "") or "COMPRESSION" in (out or "").upper() or "сжат" in (out or "").lower()):
+        log("Редакция SQL не умеет COMPRESSION, повтор без сжатия на сервере")
+        rc, out = run_logged(cmd + [query_plain], 7200)
     if rc != 0:
         text = out or ""
         if "3201" in text or "операционной системы 3" in text.lower() or "cannot find the path" in text.lower():
@@ -89,6 +93,7 @@ def backup_one(task, db):
     if unc:
         smb_get(unc, task.get("smb_user") or "", task.get("smb_pass") or "", filename, dest)
         log("Файл скопирован на NAS: %s" % dest)
+        archive_copy(dest)
     else:
         log("SMB-шара не задана. Файл остался на SQL Server: %s" % remote)
     rotate(task, nas_dir, db)
@@ -99,7 +104,7 @@ def rotate(task, nas_dir, db):
     files = []
     for name in os.listdir(nas_dir):
         path = os.path.join(nas_dir, name)
-        if name.startswith(prefix) and name.endswith(".bak") and os.path.isfile(path):
+        if name.startswith(prefix) and (name.endswith(".bak") or name.endswith(".bak.gz")) and os.path.isfile(path):
             files.append(path)
     files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     mode = task.get("rot_mode")
@@ -148,6 +153,31 @@ def smart_keep(files):
             seen_week.add(key)
             chosen.append(path)
     return chosen
+
+def archive_copy(dest):
+    gz = dest + ".gz"
+    log("Архивация %s" % os.path.basename(dest))
+    with open(gz, "wb") as out:
+        p = subprocess.run(["gzip", "-c", dest], stdout=out, stderr=subprocess.PIPE, timeout=7200)
+    if p.returncode != 0:
+        if os.path.exists(gz):
+            os.remove(gz)
+        err = (p.stderr or b"").decode("utf-8", "replace")[:300]
+        raise RuntimeError("не удалось заархивировать копию: %s" % err)
+    os.remove(dest)
+    log("Архив на NAS: %s" % os.path.basename(gz))
+
+def unpack_archive(path):
+    if not path.endswith(".gz"):
+        return path, False
+    raw = os.path.join(VAR, "restore-%s" % os.path.basename(path)[:-3])
+    log("Распаковка %s" % os.path.basename(path))
+    with open(raw, "wb") as out:
+        p = subprocess.run(["gzip", "-dc", path], stdout=out, stderr=subprocess.PIPE, timeout=7200)
+    if p.returncode != 0:
+        err = (p.stderr or b"").decode("utf-8", "replace")[:300]
+        raise RuntimeError("не удалось распаковать архив: %s" % err)
+    return raw, True
 
 def run_logged(cmd, timeout):
     env = dict(os.environ, HOME=VAR, USERPROFILE=VAR)
@@ -221,7 +251,9 @@ def parse_filelist(text):
 
 def restore_job(job):
     bak = os.path.realpath(job.get("bak") or "")
-    if not bak.startswith("/volume") or not bak.lower().endswith(".bak") or not os.path.isfile(bak):
+    if not bak.startswith("/volume") or not os.path.isfile(bak):
+        raise RuntimeError("файл копии недоступен")
+    if not (bak.lower().endswith(".bak") or bak.lower().endswith(".bak.gz")):
         raise RuntimeError("файл копии недоступен")
     host = job.get("host") or ""
     port = str(job.get("port") or "1433")
@@ -230,9 +262,19 @@ def restore_job(job):
     dbname = job.get("dbname") or ""
     sql_dir = (job.get("sql_dir") or r"C:\SQLBackups").rstrip("\\/")
     ident = sql_ident(dbname)
-    filename = os.path.basename(bak)
-    log("=== Восстановление %s на %s ===" % (filename, host))
-    smb_put(job.get("smb_share") or "", job.get("smb_user") or "", job.get("smb_pass") or "", bak, filename)
+    local, temporary = unpack_archive(bak)
+    filename = os.path.basename(local)
+    if not filename.lower().endswith(".bak"):
+        filename += ".bak"
+    log("=== Восстановление %s на %s ===" % (os.path.basename(bak), host))
+    try:
+        smb_put(job.get("smb_share") or "", job.get("smb_user") or "", job.get("smb_pass") or "", local, filename)
+    finally:
+        if temporary:
+            try:
+                os.remove(local)
+            except OSError:
+                pass
     remote = win_join(sql_dir, filename)
     code, out = sql_exec(host, port, user, password,
                          "RESTORE FILELISTONLY FROM DISK = N'%s'" % remote.replace("'", "''"), timeout=600)

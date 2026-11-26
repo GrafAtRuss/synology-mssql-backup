@@ -85,7 +85,7 @@ def list_baks(path):
     except OSError as e:
         return {"path": path, "files": [], "error": "Нет доступа: %s" % e}
     for name in names:
-        if not name.lower().endswith(".bak"):
+        if not (name.lower().endswith(".bak") or name.lower().endswith(".bak.gz")):
             continue
         full = os.path.join(path, name)
         if not os.path.isfile(full):
@@ -94,6 +94,49 @@ def list_baks(path):
         files.append({"name": name, "path": full, "size": st.st_size, "mtime": int(st.st_mtime)})
     files.sort(key=lambda x: x["mtime"], reverse=True)
     return {"path": path, "files": files}
+
+def list_versions(directory, db):
+    directory = os.path.realpath(directory or "")
+    if not directory.startswith("/volume") or not os.path.isdir(directory):
+        return {"versions": [], "error": "Папка задачи недоступна"}
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", db or "")
+    rx = re.compile(r"^" + re.escape(safe) + r"_(\d{8})_(\d{6})\.bak(\.gz)?$")
+    versions = []
+    try:
+        names = os.listdir(directory)
+    except OSError as e:
+        return {"versions": [], "error": "Нет доступа: %s" % e}
+    for name in names:
+        match = rx.match(name)
+        if not match:
+            continue
+        full = os.path.join(directory, name)
+        if not os.path.isfile(full):
+            continue
+        ymd, hms = match.group(1), match.group(2)
+        label = "%s.%s.%s %s:%s" % (ymd[6:8], ymd[4:6], ymd[0:4], hms[0:2], hms[2:4])
+        versions.append({
+            "path": full,
+            "label": label,
+            "size": os.path.getsize(full),
+            "stamp": ymd + hms,
+        })
+    versions.sort(key=lambda item: item["stamp"], reverse=True)
+    return {"versions": versions}
+
+def make_dir(parent, name):
+    parent = os.path.realpath(parent or "")
+    if not parent.startswith("/volume") or not os.path.isdir(parent):
+        return {"ok": False, "msg": "Сначала откройте папку на томе"}
+    name = (name or "").strip()
+    if not name or name in (".", "..") or "/" in name or "\\" in name or len(name) > 64:
+        return {"ok": False, "msg": "Недопустимое имя папки"}
+    dest = os.path.join(parent, name)
+    try:
+        os.makedirs(dest, exist_ok=True)
+    except OSError as e:
+        return {"ok": False, "msg": "Не удалось создать папку: %s" % e}
+    return {"ok": True, "path": dest}
 
 def js_day(now):
     return (now.weekday() + 1) % 7
@@ -244,6 +287,10 @@ class H(BaseHTTPRequestHandler):
             raw = (q.get("path") or ["/"])[0]
             self._send(200, list_baks(raw))
             return
+        if path == "/api/versions":
+            q = parse_qs(urlparse(self.path).query)
+            self._send(200, list_versions((q.get("dir") or [""])[0], (q.get("db") or [""])[0]))
+            return
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
@@ -292,7 +339,8 @@ class H(BaseHTTPRequestHandler):
             return
         if path == "/api/restore":
             bak = os.path.realpath(data.get("bak") or "")
-            if not bak.startswith("/volume") or not bak.lower().endswith(".bak") or not os.path.isfile(bak):
+            low = bak.lower()
+            if not bak.startswith("/volume") or not os.path.isfile(bak) or not (low.endswith(".bak") or low.endswith(".bak.gz")):
                 self._send(200, {"ok": False, "msg": "Выберите файл .bak на томе NAS"})
                 return
             if not (data.get("host") and data.get("user") and data.get("dbname") and data.get("smb_share") and data.get("sql_dir")):
@@ -303,6 +351,9 @@ class H(BaseHTTPRequestHandler):
                 json.dump(data, f, ensure_ascii=False)
             subprocess.Popen(["/usr/bin/python3", os.path.join(TARGET, "bin/backup.py"), "--restore", req], env=sql_env())
             self._send(200, {"ok": True, "msg": "Восстановление запущено. Ход — в журнале задачи."})
+            return
+        if path == "/api/mkdir":
+            self._send(200, make_dir(data.get("path") or "", data.get("name") or ""))
             return
         self._send(404, {"error": "not found"})
 

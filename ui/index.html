@@ -59,6 +59,8 @@ input, select { width:100%; max-width:460px; height:32px; border:1px solid #cfd4
 .open { margin-left:auto; width:28px; height:28px; line-height:26px; text-align:center; color:#0576e8; font-size:18px; }
 .fico { width:16px; height:16px; flex:none; background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M1.5 3.5h4l1.2 1.4H14.5v8H1.5z' fill='%23f5c451' stroke='%23d9a441'/></svg>") center/16px no-repeat; }
 .naspath { font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mkdir { display:flex; gap:8px; align-items:center; margin-top:8px; }
+.mkdir input { flex:1; width:auto; max-width:none; }
 .days { display:flex; gap:6px; margin:4px 0 8px; }
 .day { width:36px; height:36px; border-radius:50%; border:1px solid #cfd4da; background:#fff; color:#333; cursor:pointer; font-size:12px; padding:0; }
 .day.on { background:var(--blue); border-color:var(--blue); color:#fff; }
@@ -137,6 +139,10 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
           <div class="tree-body" id="nasList"></div>
         </div>
         <div class="hint">Выбрано: <b id="nasChosen">не выбрано</b>. Щелкните папку, стрелка открывает её.</div>
+        <div class="mkdir">
+          <input id="newFolder" placeholder="Имя новой папки">
+          <button type="button" class="btn sec" onclick="createFolder()">Создать папку</button>
+        </div>
         <input type="hidden" id="w_nas" value="">
       </div>
       <div class="step" id="s3">
@@ -187,12 +193,18 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
     <div class="inner">
       <div class="step on" id="r1">
         <div class="tree">
-          <div class="tree-head"><span class="naspath" id="rPath">Копии</span></div>
-          <div class="tree-body" id="rList"></div>
+          <div class="tree-head"><span>Базы этой задачи</span></div>
+          <div class="tree-body" id="rDbList"></div>
         </div>
-        <div class="hint">Файл .bak с NAS будет передан на другой SQL Server по SMB и восстановлен с локального диска этого сервера.</div>
+        <div class="hint" id="rTaskHint"></div>
       </div>
       <div class="step" id="r2">
+        <div class="tree">
+          <div class="tree-head"><span>Дата и время копии</span></div>
+          <div class="tree-body" id="rVerList"></div>
+        </div>
+      </div>
+      <div class="step" id="r3">
         <label>Хост другого SQL Server</label><input id="r_host" placeholder="192.168.1.20">
         <label>Порт</label><input id="r_port" value="1433">
         <label>Пользователь</label><input id="r_user">
@@ -200,7 +212,7 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
         <div style="margin-top:12px"><button class="btn sec" type="button" onclick="testRestore()">Проверить подключение</button></div>
         <div id="rConn" class="hint"></div>
       </div>
-      <div class="step" id="r3">
+      <div class="step" id="r4">
         <label>Имя базы на этом сервере</label><input id="r_db" placeholder="contracts">
         <label>Папка на целевом SQL Server</label><input id="r_sql" value="C:\SQLBackups">
         <div class="hint">Сюда кладётся .bak и файлы базы. Служба SQL должна иметь права на папку.</div>
@@ -353,6 +365,19 @@ function pickNas(){
   selectNas(window._nasPath || "");
   if ((document.getElementById("w_nas").value || "").indexOf("/volume") !== 0) document.getElementById("nasChosen").textContent = "отметьте папку";
 }
+async function createFolder(){
+  const name = document.getElementById("newFolder").value.trim();
+  const parent = window._nasPath || "";
+  if (!name) { alert("Введите имя папки"); return; }
+  if (parent.indexOf("/volume") !== 0) { alert("Сначала откройте общую папку"); return; }
+  try {
+    const d = await api("/api/mkdir", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({path: parent, name: name})});
+    if (!d.ok) { alert(d.msg || "Не создано"); return; }
+    document.getElementById("newFolder").value = "";
+    selectNas(d.path);
+    loadNas(parent);
+  } catch(e) { alert(e.message); }
+}
 function closeWiz(){ document.getElementById("mask").classList.remove("on"); }
 function showStep(){
   for (let i=1;i<=4;i++) document.getElementById("s"+i).classList.toggle("on", i===step);
@@ -464,58 +489,68 @@ async function deleteTask(){
 let rstep = 1;
 function closeRestore(){ document.getElementById("rmask").classList.remove("on"); }
 function showRStep(){
-  for (let i=1;i<=3;i++) document.getElementById("r"+i).classList.toggle("on", i===rstep);
-  const titles=["Выбор копии","Другой сервер","База и папка"];
-  document.getElementById("rTitle").textContent = "Восстановление — " + titles[rstep-1];
-  document.getElementById("rNext").textContent = rstep===3 ? "Восстановить" : "Далее";
+  for (let i=1;i<=4;i++) document.getElementById("r"+i).classList.toggle("on", i===rstep);
+  const titles=["База задачи","Дата копии","Другой сервер","Куда восстановить"];
+  document.getElementById("rTitle").textContent = "Мастер восстановления — " + titles[rstep-1];
+  document.getElementById("rNext").textContent = rstep===4 ? "Восстановить" : "Далее";
 }
 function openRestore(){
+  const t = tasks.find(x => x.id===selected);
+  if (!t) { alert("Сначала выберите задачу"); return; }
   rstep = 1;
-  ["r_host","r_user","r_pass","r_db","r_share","r_suser","r_spass"].forEach(id => document.getElementById(id).value="");
+  ["r_host","r_user","r_pass","r_share","r_suser","r_spass"].forEach(id => document.getElementById(id).value="");
   document.getElementById("r_port").value="1433";
   document.getElementById("r_sql").value="C:\\SQLBackups";
+  document.getElementById("r_db").value="";
   document.getElementById("rConn").textContent="";
   document.getElementById("rConn").className="hint";
   document.getElementById("rMsg").textContent="";
   document.getElementById("rMsg").className="hint";
+  const dbs = t.dbs || [];
+  document.getElementById("rTaskHint").textContent = "Задача «" + (t.name || t.host || "") + "». Только базы этого задания.";
+  document.getElementById("rDbList").innerHTML = dbs.length
+    ? dbs.map(db => '<label class="dbrow"><input type="radio" name="rdb" value="'+esc(db)+'"><span class="dbico"></span><span class="dbname">'+esc(db)+'</span></label>').join("")
+    : '<div class="hint" style="padding:12px 16px">В задаче нет баз.</div>';
+  document.getElementById("rVerList").innerHTML = "";
   showRStep();
   document.getElementById("rmask").classList.add("on");
-  const t = tasks.find(x => x.id===selected);
-  loadRestoreDir(t && t.nas_dir ? t.nas_dir : "/");
 }
 function fmtSize(n){
   if (n > 1048576) return (n/1048576).toFixed(1) + " МБ";
   if (n > 1024) return Math.round(n/1024) + " КБ";
   return n + " Б";
 }
-function guessDb(name){
-  return String(name||"").replace(/\.bak$/i,"").replace(/_\d{8}_\d{6}$/,"");
-}
-async function loadRestoreDir(path){
-  const box = document.getElementById("rList");
+async function loadVersions(){
+  const picked = document.querySelector("input[name=rdb]:checked");
+  if (!picked) { alert("Выберите базу"); return false; }
+  const t = tasks.find(x => x.id===selected);
+  document.getElementById("r_db").value = picked.value;
+  const box = document.getElementById("rVerList");
   box.innerHTML = '<div class="hint" style="padding:10px 12px">Загрузка…</div>';
   try {
-    const d = await api("/api/browse?path="+encodeURIComponent(path||"/"));
-    const f = await api("/api/files?path="+encodeURIComponent(d.path||path||"/"));
-    document.getElementById("rPath").textContent = (!d.path || d.path==="/") ? "Общие папки" : d.path;
-    let html = "";
-    if (d.parent) html += '<div class="frow" onclick=\'loadRestoreDir('+JSON.stringify(d.parent)+')\'><span class="fico"></span><span>Наверх</span></div>';
-    (d.items||[]).forEach(it => {
-      html += '<div class="frow" onclick=\'loadRestoreDir('+JSON.stringify(it.path)+')\'><span class="fico"></span><span class="dbname">'+esc(it.name)+'</span><span class="open">›</span></div>';
-    });
-    (f.files||[]).forEach(file => {
-      const when = new Date(file.mtime*1000).toLocaleString();
-      html += '<label class="dbrow"><input type="radio" name="rbak" value="'+esc(file.path)+'" onchange="document.getElementById(\'r_db\').value=guessDb('+JSON.stringify(file.name)+')"><span class="dbname">'+esc(file.name)+'</span><span class="dbcount">'+esc(fmtSize(file.size))+' · '+esc(when)+'</span></label>';
-    });
-    if (f.error) html += '<div class="err" style="padding:8px 12px">'+esc(f.error)+'</div>';
-    if (!html) html = '<div class="hint" style="padding:10px 12px">В этой папке нет копий .bak</div>';
-    box.innerHTML = html;
+    const d = await api("/api/versions?dir="+encodeURIComponent((t && t.nas_dir) || "")+"&db="+encodeURIComponent(picked.value));
+    const vers = d.versions || [];
+    if (d.error) { box.innerHTML = '<div class="err" style="padding:8px 12px">'+esc(d.error)+'</div>'; return true; }
+    box.innerHTML = vers.length
+      ? vers.map(v => '<label class="dbrow"><input type="radio" name="rver" value="'+esc(v.path)+'"><span class="dbname">'+esc(v.label)+'</span><span class="dbcount">'+esc(fmtSize(v.size))+'</span></label>').join("")
+      : '<div class="hint" style="padding:12px 16px">Копий этой базы ещё нет.</div>';
+    return true;
   } catch(e) {
     box.innerHTML = '<div class="err" style="padding:8px 12px">'+esc(e.message)+'</div>';
+    return true;
   }
 }
 function rPrev(){ if(rstep>1){ rstep--; showRStep(); } else closeRestore(); }
-function rNext(){ if(rstep<3){ rstep++; showRStep(); } else startRestore(); }
+function rNext(){
+  if (rstep===1) {
+    if (!document.querySelector("input[name=rdb]:checked")) { alert("Выберите базу"); return; }
+    loadVersions().then(function(){ rstep=2; showRStep(); });
+    return;
+  }
+  if (rstep===2 && !document.querySelector("input[name=rver]:checked")) { alert("Выберите дату копии"); return; }
+  if (rstep<4) { rstep++; showRStep(); }
+  else startRestore();
+}
 async function testRestore(){
   const msg = document.getElementById("rConn");
   msg.className="hint"; msg.textContent="Подключение…";
@@ -532,8 +567,8 @@ async function testRestore(){
 }
 async function startRestore(){
   const msg = document.getElementById("rMsg");
-  const picked = document.querySelector('input[name=rbak]:checked');
-  if (!picked) { rstep=1; showRStep(); alert("Выберите файл .bak"); return; }
+  const picked = document.querySelector("input[name=rver]:checked");
+  if (!picked) { rstep=2; showRStep(); alert("Выберите дату копии"); return; }
   const db = document.getElementById("r_db").value.trim();
   if (!db) { msg.className="err"; msg.textContent="Укажите имя базы"; return; }
   msg.className="hint"; msg.textContent="Запуск…";

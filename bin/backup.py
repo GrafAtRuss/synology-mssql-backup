@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, sys, datetime, subprocess, re
+import json, os, sys, datetime, subprocess, re, time, threading
 
 VAR = "/var/packages/MSSQLBackup/var"
 TARGET = "/var/packages/MSSQLBackup/target"
@@ -69,21 +69,20 @@ def backup_one(task, db):
     code, out = sql_exec(host, port, user, password, "EXEC master.dbo.xp_create_subdir N'%s'" % folder, timeout=60)
     if code != 0:
         log("Папку %s заранее создать не удалось: %s" % (sql_dir, (out or "")[-400:]))
+    else:
+        log("Папка на SQL Server готова: %s" % sql_dir.rstrip("\\/"))
     query = "BACKUP DATABASE [%s] TO DISK = N'%s' WITH INIT, STATS = 10" % (ident, remote.replace("'", "''"))
     sqlcmd = sqlcmd_bin()
     if not sqlcmd:
         raise RuntimeError("sqlcmd не найден в пакете")
     log("BACKUP %s -> %s" % (db, remote))
     cmd = [sqlcmd, "-S", "%s,%s" % (host, port), "-U", user, "-P", password, "-C", "-l", "30", "-b", "-Q", query]
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=7200, env=dict(os.environ, HOME=VAR, USERPROFILE=VAR))
-    out = ((p.stdout or "") + "\n" + (p.stderr or "")).strip()
-    if out:
-        log(out[-1500:])
-    if p.returncode != 0:
+    rc, out = run_logged(cmd, 7200)
+    if rc != 0:
         text = out or ""
         if "3201" in text or "операционной системы 3" in text.lower() or "cannot find the path" in text.lower():
             raise RuntimeError("На сервере %s нет пути %s. Создайте эту папку на локальном диске SQL Server и дайте службе SQL право записи, либо укажите уже существующий каталог." % (host, sql_dir))
-        raise RuntimeError("BACKUP завершился с кодом %s" % p.returncode)
+        raise RuntimeError("BACKUP завершился с кодом %s" % rc)
     os.makedirs(nas_dir, exist_ok=True)
     dest = os.path.join(nas_dir, filename)
     unc = (task.get("smb_share") or "").strip()
@@ -149,6 +148,34 @@ def smart_keep(files):
             seen_week.add(key)
             chosen.append(path)
     return chosen
+
+def run_logged(cmd, timeout):
+    env = dict(os.environ, HOME=VAR, USERPROFILE=VAR)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    chunks = []
+
+    def reader():
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            chunks.append(line)
+            log(line)
+
+    threading.Thread(target=reader, daemon=True).start()
+    started = time.time()
+    deadline = started + timeout
+    while True:
+        try:
+            rc = proc.wait(timeout=20)
+            break
+        except subprocess.TimeoutExpired:
+            if time.time() > deadline:
+                proc.kill()
+                raise RuntimeError("превышено время ожидания, %d с" % timeout)
+            log("идёт копирование, прошло %d с" % int(time.time() - started))
+    time.sleep(0.3)
+    return rc, "\n".join(chunks)
 
 def smb_put(unc, user, password, local, filename):
     host, share, subs = parse_unc(unc)

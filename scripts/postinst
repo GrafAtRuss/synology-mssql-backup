@@ -1,0 +1,6 @@
+#!/bin/sh
+mkdir -p /var/packages/MSSQLBackup/var
+chown -R MSSQLBackup:MSSQLBackup /var/packages/MSSQLBackup/var 2>/dev/null || true
+chmod 755 /var/packages/MSSQLBackup/target/bin/*.sh /var/packages/MSSQLBackup/target/bin/sqlcmd-linux-* 2>/dev/null || true
+/var/packages/MSSQLBackup/target/bin/install_sqlcmd.sh >/var/packages/MSSQLBackup/var/install.log 2>&1 || true
+exit 0

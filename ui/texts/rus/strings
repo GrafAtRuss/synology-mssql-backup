@@ -1,0 +1,6 @@
+[app]
+displayname="MSSQL Backup"
+description="Резервное копирование Microsoft SQL Server"
+
+[locale]
+code="rus"

@@ -1,0 +1,33 @@
+#!/bin/sh
+PIDFILE=/var/packages/MSSQLBackup/var/webui.pid
+PY=/usr/bin/python3
+APP=/var/packages/MSSQLBackup/target/bin/webui.py
+LOG=/var/packages/MSSQLBackup/var/webui.log
+
+case "$1" in
+  start)
+    export HOME=/var/packages/MSSQLBackup/var
+    export USERPROFILE="$HOME"
+    mkdir -p "$HOME"
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      exit 0
+    fi
+    export HOME=/var/packages/MSSQLBackup/var
+    export USERPROFILE="$HOME"
+    nohup "$PY" "$APP" >> "$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    ;;
+  stop)
+    if [ -f "$PIDFILE" ]; then
+      kill "$(cat "$PIDFILE")" 2>/dev/null
+      rm -f "$PIDFILE"
+    fi
+    ;;
+  status)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+      exit 0
+    fi
+    exit 1
+    ;;
+esac
+exit 0

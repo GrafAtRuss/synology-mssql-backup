@@ -1,0 +1,6 @@
+[app]
+displayname="MSSQL Backup"
+description="Microsoft SQL Server backup"
+
+[locale]
+code="enu"

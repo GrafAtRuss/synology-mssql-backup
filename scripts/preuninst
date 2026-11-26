@@ -1,0 +1,13 @@
+#!/bin/sh
+USER="MSSQLBackup"
+TMP=$(mktemp 2>/dev/null || echo /tmp/mssqlbackup-cron.$$)
+if crontab -u "$USER" -l >"$TMP" 2>/dev/null; then
+  grep -v '/var/packages/MSSQLBackup/' "$TMP" > "$TMP.keep" || true
+  if [ -s "$TMP.keep" ]; then
+    crontab -u "$USER" "$TMP.keep" || true
+  else
+    crontab -u "$USER" -r 2>/dev/null || true
+  fi
+fi
+rm -f "$TMP" "$TMP.keep"
+exit 0

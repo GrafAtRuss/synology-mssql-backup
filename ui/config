@@ -1,0 +1,23 @@
+{
+    "Main.js": {
+        "SYNO.SDS.MSSQLBackup.Instance": {
+            "type": "app",
+            "version": "1.14.0",
+            "title": "MSSQL Backup",
+            "desc": "Резервное копирование MSSQL",
+            "icon": "images/icon_{0}.png",
+            "texts": "texts",
+            "allowMultiInstance": false,
+            "waterfallLoadTexts": true,
+            "appWindow": "SYNO.SDS.MSSQLBackup.Main",
+            "depend": []
+        },
+        "SYNO.SDS.MSSQLBackup.Main": {
+            "type": "lib",
+            "title": "MSSQL Backup",
+            "icon": "images/icon_{0}.png",
+            "texts": "texts",
+            "depend": []
+        }
+    }
+}

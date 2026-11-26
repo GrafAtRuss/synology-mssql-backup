@@ -60,7 +60,7 @@ def browse(path):
     try:
         names = sorted(os.listdir(path), key=str.lower)
     except OSError as e:
-        return {"path": path, "parent": parent, "items": [], "error": "Нет доступа: %s" % e}
+        return {"path": path, "parent": parent, "items": [], "error": "Нет доступа к %s. Пользователю пакета MSSQLBackup нужны права чтения и записи. Нажмите «Выдать доступ» или откройте Панель управления → Общая папка → Разрешения → Системные внутренние пользователи." % path}
     items = []
     for name in names:
         if name.startswith(skip_prefix) or name in ("lost+found",):

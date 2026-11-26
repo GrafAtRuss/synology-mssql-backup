@@ -343,7 +343,7 @@ async function loadNas(path){
     window._nasPath = d.path || "/";
     let html = "";
     if (d.parent) html += '<div class="frow" onclick=\'loadNas('+JSON.stringify(d.parent)+')\'><span class="fico"></span><span>Наверх</span></div>';
-    if (d.error) html += '<div class="err" style="padding:8px 12px">'+esc(d.error)+'</div>';
+    if (d.error) html += '<div class="err" style="padding:8px 12px">'+esc(d.error)+'</div>' + (d.error.indexOf("MSSQLBackup")>=0 ? '<div style="padding:0 12px 10px"><button type="button" class="btn" onclick="grantShare()">Выдать доступ</button></div>' : '');
     (d.items||[]).forEach(it => {
       html += '<div class="frow'+(it.path===document.getElementById("w_nas").value?' on':'')+'" onclick=\'selectNas('+JSON.stringify(it.path)+')\'><span class="fico"></span><span class="dbname">'+esc(it.name)+'</span><span class="open" title="Открыть" onclick=\'event.stopPropagation();loadNas('+JSON.stringify(it.path)+')\'>›</span></div>';
     });
@@ -358,6 +358,49 @@ function selectNas(path){
   document.getElementById("w_nas").value = path;
   document.getElementById("nasChosen").textContent = path;
   document.querySelectorAll("#nasList .frow").forEach(el => el.classList.toggle("on", (el.getAttribute("onclick")||"").indexOf(JSON.stringify(path))!==-1));
+}
+function dsmApi(opts){
+  return new Promise(function(resolve, reject){
+    const SYNO = window.parent && window.parent.SYNO;
+    if (!SYNO || !SYNO.API || !SYNO.API.Request) { reject(new Error("Окно открыто вне DSM")); return; }
+    SYNO.API.Request({
+      api: opts.api, method: opts.method, version: opts.version || 1, params: opts.params || {},
+      callback: function(ok, data, req){
+        if (ok) resolve(data || {});
+        else reject(new Error((data && (data.code || data.error && data.error.code)) || "DSM отклонил запрос"));
+      }
+    });
+  });
+}
+async function grantShare(){
+  const path = window._nasPath || document.getElementById("w_nas").value || "";
+  const m = String(path).match(/^\/volume\d+\/([^/]+)/);
+  if (!m) { alert("Сначала откройте общую папку, например /volume1/MSSQL"); return; }
+  const share = m[1];
+  const user = "MSSQLBackup";
+  try {
+    const listed = await dsmApi({api:"SYNO.Core.Share.Permission", method:"list", version:1, params:{name:share, user_group_type:"system"}});
+    let items = listed.items || listed.permissions || [];
+    let found = false;
+    items = items.map(function(p){
+      if (p.name === user) { found = true; return Object.assign({}, p, {is_writable:true, is_readonly:false, is_deny:false}); }
+      return p;
+    });
+    if (!found) items.push({name:user, is_writable:true, is_readonly:false, is_deny:false, is_custom:false});
+    const params = {name:share, user_group_type:"system", permissions: items};
+    try {
+      await dsmApi({api:"SYNO.Core.Share.Permission", method:"set", version:1, params: params});
+    } catch(e1) {
+      await dsmApi({api:"SYNO.Entry.Request", method:"request", version:1, params:{
+        mode:"sequential", stop_when_error:true,
+        compound:[{api:"SYNO.Core.Share.Permission", method:"set", version:1, params: params}]
+      }});
+    }
+    alert("Пользователю MSSQLBackup выданы права на «" + share + "». Откройте папку ещё раз.");
+    loadNas(path);
+  } catch(e) {
+    alert("Не удалось выдать права автоматически (" + e.message + ").\n\nПанель управления → Общая папка → " + share + " → Изменить → Разрешения → Системные внутренние пользователи → MSSQLBackup → Чтение/запись.");
+  }
 }
 function pickNas(){
   const chosen = document.getElementById("w_nas").value || "";

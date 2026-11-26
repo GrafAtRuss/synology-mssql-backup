@@ -187,12 +187,9 @@ let step = 1;
 let editing = null;
 
 function esc(s){
-  return String(s==null?"":s)
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, """)
-    .replace(/'/g, "&#39;");
+  return String(s==null?"":s).replace(/[&<>"']/g, function(c){
+    return "&#" + c.charCodeAt(0) + ";";
+  });
 }
 
 async function api(path, opt){

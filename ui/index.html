@@ -123,7 +123,7 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
         </div>
         <label>Папка на SQL Server (локальный диск службы SQL)</label>
         <input id="w_sql" value="C:\SQLBackups">
-        <div class="hint">SQL Server пишет .bak сюда. UNC служба SQL не использует.</div>
+        <div class="hint">Локальный диск SQL Server, не UNC. Если папки нет, пакет попробует создать её. Диск (например D:) должен существовать, а у входа SQL — право на xp_create_subdir.</div>
         <label>SMB-шара этой папки</label>
         <input id="w_share" placeholder="\\192.168.1.10\SQLBackups">
         <label>Пользователь SMB</label><input id="w_suser">

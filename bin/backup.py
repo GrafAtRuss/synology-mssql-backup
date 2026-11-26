@@ -65,6 +65,10 @@ def backup_one(task, db):
     filename = "%s_%s.bak" % (re.sub(r"[^A-Za-z0-9_.-]", "_", db), stamp)
     remote = win_join(sql_dir, filename)
     ident = sql_ident(db)
+    folder = sql_dir.rstrip("\\/").replace("'", "''")
+    code, out = sql_exec(host, port, user, password, "EXEC master.dbo.xp_create_subdir N'%s'" % folder, timeout=60)
+    if code != 0:
+        log("Папку %s заранее создать не удалось: %s" % (sql_dir, (out or "")[-400:]))
     query = "BACKUP DATABASE [%s] TO DISK = N'%s' WITH INIT, STATS = 10" % (ident, remote.replace("'", "''"))
     sqlcmd = sqlcmd_bin()
     if not sqlcmd:
@@ -76,6 +80,9 @@ def backup_one(task, db):
     if out:
         log(out[-1500:])
     if p.returncode != 0:
+        text = out or ""
+        if "3201" in text or "операционной системы 3" in text.lower() or "cannot find the path" in text.lower():
+            raise RuntimeError("На сервере %s нет пути %s. Создайте эту папку на локальном диске SQL Server и дайте службе SQL право записи, либо укажите уже существующий каталог." % (host, sql_dir))
         raise RuntimeError("BACKUP завершился с кодом %s" % p.returncode)
     os.makedirs(nas_dir, exist_ok=True)
     dest = os.path.join(nas_dir, filename)

@@ -23,5 +23,5 @@ mkdir -p "$HOME"
 ln -sfn "$BIN" "$DIR/sqlcmd"
 VER=$("$DIR/$BIN" --version 2>/dev/null | head -n 1)
 echo "sqlcmd из пакета ($ARCH): ${VER:-готов}"
-echo "$(date) sqlcmd ${VER:-готов}" >> "$LOG"
+echo "$(date) sqlcmd готов" >> "$LOG"
 exit 0

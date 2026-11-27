@@ -68,9 +68,25 @@ input, select { width:100%; max-width:460px; height:32px; border:1px solid #cfd4
 .naspath { font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .mkdir { display:flex; gap:8px; align-items:center; margin-top:8px; }
 .mkdir input { flex:1; width:auto; max-width:none; }
-.days { display:flex; gap:6px; margin:4px 0 8px; }
-.day { width:36px; height:36px; border-radius:50%; border:1px solid #cfd4da; background:#fff; color:#333; cursor:pointer; font-size:12px; padding:0; }
-.day.on { background:var(--blue); border-color:var(--blue); color:#fff; }
+.days { display:inline-flex; border:1px solid #c5cad1; border-radius:2px; overflow:hidden; margin-top:2px; }
+.day { width:52px; height:28px; border:none; border-right:1px solid #c5cad1; background:#fff; color:#414b55; cursor:pointer; font-size:12px; padding:0; border-radius:0; }
+.day:last-child { border-right:none; }
+.day.on { background:#0576e8; color:#fff; }
+.hb-label { margin:16px 0 6px; font-weight:600; color:#414b55; }
+.hb-check { display:flex; align-items:center; gap:8px; margin:0 0 4px; font-weight:400; }
+.hb-radio { display:flex; align-items:center; gap:8px; margin:8px 0; font-weight:400; flex-wrap:wrap; }
+.hb-indent { margin:0 0 8px 24px; }
+.hb-note { margin:0 0 8px 24px; background:#f7f8fa; border:1px solid #e5e7eb; padding:8px 12px; color:#555; max-width:560px; }
+.hb-note ul { margin:6px 0 0; padding-left:18px; }
+.hb-time, .hb-range { display:flex; align-items:center; gap:6px; margin-top:4px; }
+.hb-time select, .hb-range select, .hb-radio select { width:64px; max-width:64px; }
+.hb-num { width:72px; max-width:72px; display:inline-block; height:28px; text-align:right; }
+.tl { margin:14px 0 4px; max-width:560px; }
+.tl-bar { display:flex; height:16px; border:1px solid #d5d8de; border-radius:2px; overflow:hidden; }
+.tl-bar i { flex:1; display:block; }
+.tl-cap { display:flex; justify-content:space-between; color:#8a9099; font-size:11px; margin-top:4px; }
+.tl-legend { display:flex; gap:14px; margin-top:6px; color:#666; font-size:11px; }
+.tl-legend b { display:inline-block; width:12px; height:12px; margin-right:4px; vertical-align:-2px; }
 .checkline, .radio { display:flex; align-items:center; gap:8px; margin:8px 0; font-weight:400; }
 .checkline { font-weight:600; }
 .indent { margin:0 0 10px 26px; color:#444; }
@@ -153,9 +169,9 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
         <input type="hidden" id="w_nas" value="">
       </div>
       <div class="step" id="s3">
-        <label class="checkline"><input type="checkbox" id="schedOn" checked onchange="toggleBlock('schedBox', this.checked)"> Включить расписание резервного копирования</label>
+        <label class="hb-check"><input type="checkbox" id="schedOn" checked onchange="toggleBlock('schedBox', this.checked)"> Включить расписание резервного копирования</label>
         <div id="schedBox">
-          <div class="sub">Запускать в следующие дни</div>
+          <div class="hb-label">Запускать в следующие дни</div>
           <div class="days" id="days">
             <button type="button" class="day on" data-d="0" onclick="this.classList.toggle('on')">Вс</button>
             <button type="button" class="day on" data-d="1" onclick="this.classList.toggle('on')">Пн</button>
@@ -165,26 +181,39 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
             <button type="button" class="day on" data-d="5" onclick="this.classList.toggle('on')">Пт</button>
             <button type="button" class="day on" data-d="6" onclick="this.classList.toggle('on')">Сб</button>
           </div>
-          <div class="sub">Время запуска</div>
-          <div class="time"><select id="w_hour"></select><span>:</span><select id="w_min"></select></div>
-          <div class="sub">Частота</div>
-          <label class="radio"><input type="radio" name="rep" value="0" checked> Один раз в выбранные дни</label>
-          <label class="radio"><input type="radio" name="rep" value="n"> Повторять каждые <select id="w_repeat"></select> ч.</label>
+          <div class="hb-label">Время первого запуска</div>
+          <div class="hb-time"><select id="w_hour"></select><span>:</span><select id="w_min"></select></div>
+          <div class="hb-label">Частота</div>
+          <label class="hb-radio"><input type="radio" name="rep" value="0" checked onchange="toggleRepeat()"> Один раз в выбранные дни</label>
+          <label class="hb-radio"><input type="radio" name="rep" value="n" onchange="toggleRepeat()"> Повторять каждые <select id="w_repeat"></select> ч.</label>
+          <div id="repRange">
+            <div class="hb-label">Время последнего запуска</div>
+            <div class="hb-time"><select id="w_until_h"></select><span>:</span><select id="w_until_m"></select></div>
+          </div>
         </div>
       </div>
       <div class="step" id="s4">
-        <label class="checkline"><input type="checkbox" id="rotOn" checked onchange="toggleBlock('rotBox', this.checked)"> Включить ротацию резервных копий</label>
+        <label class="hb-check"><input type="checkbox" id="rotOn" checked onchange="toggleBlock('rotBox', this.checked)"> Включить ротацию резервных копий</label>
         <div id="rotBox">
-          <div class="policy on" id="polCount" onclick="pickRot('count')">
-            <label class="radio"><input type="radio" name="rot" value="count" checked onchange="markRot()"> С самых ранних версий</label>
-            <div class="indent">Сохранять последние <input class="num" id="w_keep" value="30"> версий</div>
+          <label class="hb-radio"><input type="radio" name="rot" value="count" checked onchange="markRot()"> С самых ранних версий</label>
+          <div class="hb-indent" id="rotCountBox">Сохранять последние <input class="hb-num" id="w_keep" value="30"> версий</div>
+          <label class="hb-radio"><input type="radio" name="rot" value="smart" onchange="markRot()"> Smart Recycle</label>
+          <div class="hb-note" id="rotSmartBox">
+            Система хранит версии, пока их число не больше максимума. Затем удаляет те, что не попадают под правила:
+            <ul>
+              <li>почасовые версии за последние 24 часа;</li>
+              <li>ежедневные версии за период от 1 дня до 1 месяца;</li>
+              <li>еженедельные версии старше 1 месяца.</li>
+            </ul>
+            <div style="margin-top:8px">Максимальное число версий <input class="hb-num" id="w_keep_smart" value="256"></div>
           </div>
-          <div class="policy" id="polSmart" onclick="pickRot('smart')">
-            <label class="radio"><input type="radio" name="rot" value="smart" onchange="markRot()"> Smart Recycle</label>
-            <div class="indent hint">Почасовые копии за последние сутки, ежедневные за месяц, еженедельные — старше.</div>
+          <div class="tl">
+            <div class="tl-bar" id="tlBar"></div>
+            <div class="tl-cap"><span>Раньше</span><span>Сейчас</span></div>
+            <div class="tl-legend" id="tlLegend"></div>
           </div>
         </div>
-        <label class="checkline" style="margin-top:14px"><input type="checkbox" id="runNowOn" checked onchange="syncCreateLabel()"> Запустить резервное копирование сразу после создания</label>
+        <label class="hb-check" style="margin-top:16px"><input type="checkbox" id="runNowOn" checked onchange="syncCreateLabel()"> <span id="runNowLabel">Запустить резервное копирование сразу после создания</span></label>
         <div id="saveMsg" class="hint"></div>
       </div>
     </div>
@@ -281,7 +310,7 @@ function showTask(id){
   document.getElementById("main").innerHTML =
     '<div class="banner"><div class="badge">&#128337;</div><div style="flex:1"><b>'+esc(t.name||"Задача")+'</b>'+
     '<div class="hint">Последний запуск смотрите в журнале. SQL пишет файл локально, NAS забирает его по SMB.</div>'+
-    '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="runNow(\''+esc(t.id)+'\')">Резервировать сейчас</button><button class="btn sec" onclick="openRestore()">Восстановить</button><button class="btn sec" onclick="deleteTask()">Удалить</button></div>'+
+    '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="runNow(\''+esc(t.id)+'\')">Резервировать сейчас</button><button class="btn sec" onclick="editTask()">Изменить</button><button class="btn sec" onclick="openRestore()">Восстановить</button><button class="btn sec" onclick="deleteTask()">Удалить</button></div>'+
     '<div class="prog" id="prog" style="display:none"><div class="prog-top"><span id="progMsg">Ожидание</span><b id="progPct">0%</b></div><div class="prog-track"><div class="prog-bar" id="progBar"></div></div></div></div></div>'+
     '<div class="grid"><div class="card"><h3>Источник</h3><div class="pad kv"><div>Хост</div><div>'+esc(t.host)+':'+esc(t.port)+'</div><div>Базы</div><div>'+esc((t.dbs||[]).join(", ")||"—")+'</div><div>Папка SQL</div><div>'+esc(t.sql_dir)+'</div></div></div>'+
     '<div class="card"><h3>Назначение</h3><div class="pad kv"><div>SMB</div><div>'+esc(t.smb_share||"—")+'</div><div>Папка NAS</div><div>'+esc(t.nas_dir)+'</div><div>Ротация</div><div>'+esc(rotText(t))+'</div><div>Расписание</div><div>'+esc(schedText(t))+'</div></div></div></div>'+
@@ -290,51 +319,97 @@ function showTask(id){
   refreshProgress();
 }
 
-function openWiz(){
-  editing = null; step = 1;
-  ["w_name","w_host","w_user","w_pass","w_suser","w_spass"].forEach(id => document.getElementById(id).value="");
-  document.getElementById("w_port").value="1433";
-  document.getElementById("w_sql").value="C:\\SQLBackups";
-  document.getElementById("w_share").value="";
-  document.getElementById("w_nas").value="";
-  document.getElementById("nasChosen").textContent = "не выбрано";
+function editTask(){
+  const t = tasks.find(x => x.id===selected);
+  if (!t) { alert("Сначала выберите задачу"); return; }
+  openWiz(t);
+}
+function openWiz(src){
+  editing = src ? src.id : null;
+  step = 1;
+  document.getElementById("w_name").value = src ? (src.name || "") : "";
+  document.getElementById("w_host").value = src ? (src.host || "") : "";
+  document.getElementById("w_port").value = src ? (src.port || "1433") : "1433";
+  document.getElementById("w_user").value = src ? (src.user || "") : "";
+  document.getElementById("w_pass").value = "";
+  document.getElementById("w_pass").placeholder = src ? "без изменений" : "";
+  document.getElementById("w_sql").value = src ? (src.sql_dir || "C:\\SQLBackups") : "C:\\SQLBackups";
+  document.getElementById("w_share").value = src ? (src.smb_share || "") : "";
+  document.getElementById("w_suser").value = src ? (src.smb_user || "") : "";
+  document.getElementById("w_spass").value = "";
+  document.getElementById("w_spass").placeholder = src ? "без изменений" : "";
+  document.getElementById("w_nas").value = src ? (src.nas_dir || "") : "";
+  document.getElementById("nasChosen").textContent = (src && src.nas_dir) ? src.nas_dir : "не выбрано";
   fillTime();
-  document.getElementById("w_hour").value="2";
-  document.getElementById("w_min").value="0";
-  document.getElementById("w_keep").value="30";
-  document.getElementById("schedOn").checked = true;
-  document.getElementById("rotOn").checked = true;
-  document.querySelector('input[name=rep][value="0"]').checked = true;
-  document.querySelector('input[name=rot][value="count"]').checked = true;
-  document.querySelectorAll(".day").forEach(b => b.classList.add("on"));
+  document.getElementById("w_hour").value = String(src ? (src.hour ?? 2) : 2);
+  document.getElementById("w_min").value = String(src ? (src.min ?? 0) : 0);
+  document.getElementById("w_until_h").value = String(src && src.until_hour != null ? src.until_hour : 23);
+  document.getElementById("w_until_m").value = String(src && src.until_min != null ? src.until_min : 0);
+  document.getElementById("w_repeat").value = String(src && Number(src.repeat) ? src.repeat : 1);
+  document.getElementById("w_keep").value = String(src ? (src.keep || 30) : 30);
+  document.getElementById("w_keep_smart").value = String(src ? (src.keep || 256) : 256);
+  document.getElementById("schedOn").checked = src ? src.sched_on !== false : true;
+  document.getElementById("rotOn").checked = src ? src.rot_on !== false : true;
+  document.querySelector('input[name=rep][value="'+(src && Number(src.repeat) ? "n" : "0")+'"]').checked = true;
+  document.querySelector('input[name=rot][value="'+(src && src.rot_mode === "smart" ? "smart" : "count")+'"]').checked = true;
+  const days = src && src.days ? src.days.map(Number) : [0,1,2,3,4,5,6];
+  document.querySelectorAll(".day").forEach(b => b.classList.toggle("on", days.indexOf(Number(b.dataset.d)) >= 0));
+  document.getElementById("runNowOn").checked = !src;
+  document.getElementById("runNowLabel").textContent = src ? "Запустить резервное копирование сразу после сохранения" : "Запустить резервное копирование сразу после создания";
+  toggleRepeat();
+  toggleBlock("schedBox", document.getElementById("schedOn").checked);
+  toggleBlock("rotBox", document.getElementById("rotOn").checked);
   markRot();
-  document.getElementById("dbList").innerHTML = '<div class="hint" style="padding:12px 16px">Сначала проверьте подключение.</div>';
-  document.getElementById("connMsg").textContent = "";
+  const known = (src && src.dbs) || [];
+  document.getElementById("dbList").innerHTML = known.length
+    ? known.map(db => '<label class="dbrow"><input type="checkbox" class="dbchk" checked value="'+esc(db)+'" onchange="updCount()"><span class="dbico"></span><span class="dbname">'+esc(db)+'</span></label>').join("")
+    : '<div class="hint" style="padding:12px 16px">Сначала проверьте подключение.</div>';
+  updCount();
+  document.getElementById("connMsg").textContent = src ? "Пароль можно не менять. «Проверить» обновит список баз." : "";
   document.getElementById("connMsg").className = "hint";
+  document.getElementById("saveMsg").textContent = "";
   showStep();
   document.getElementById("mask").classList.add("on");
-  loadNas("/");
+  loadNas(src && src.nas_dir ? src.nas_dir : "/");
+}
+function fillSelect(el, from, to, pad){
+  if (!el || el.options.length) return;
+  for (let i=from;i<=to;i++) el.add(new Option(pad ? String(i).padStart(2,"0") : String(i), String(i)));
 }
 function fillTime(){
-  const h = document.getElementById("w_hour"), m = document.getElementById("w_min"), r = document.getElementById("w_repeat");
-  if (h.options.length) return;
-  for (let i=0;i<24;i++) h.add(new Option(String(i).padStart(2,"0"), String(i)));
-  for (let i=0;i<60;i++) m.add(new Option(String(i).padStart(2,"0"), String(i)));
-  for (let i=1;i<=12;i++) r.add(new Option(String(i), String(i)));
+  fillSelect(document.getElementById("w_hour"), 0, 23, true);
+  fillSelect(document.getElementById("w_min"), 0, 59, true);
+  fillSelect(document.getElementById("w_until_h"), 0, 23, true);
+  fillSelect(document.getElementById("w_until_m"), 0, 59, true);
+  fillSelect(document.getElementById("w_repeat"), 1, 12, false);
+}
+function toggleRepeat(){
+  const on = document.querySelector('input[name=rep]:checked').value === "n";
+  const box = document.getElementById("repRange");
+  box.style.display = on ? "block" : "none";
 }
 function toggleBlock(id, on){ document.getElementById(id).style.opacity = on ? "1" : ".45"; document.getElementById(id).style.pointerEvents = on ? "auto" : "none"; }
-function pickRot(mode){ document.querySelector('input[name=rot][value="'+mode+'"]').checked = true; markRot(); }
 function markRot(){
   const mode = document.querySelector('input[name=rot]:checked').value;
-  document.getElementById("polCount").classList.toggle("on", mode==="count");
-  document.getElementById("polSmart").classList.toggle("on", mode==="smart");
+  const smart = mode === "smart";
+  document.getElementById("rotCountBox").style.display = smart ? "none" : "block";
+  document.getElementById("rotSmartBox").style.display = smart ? "block" : "none";
+  const bar = document.getElementById("tlBar");
+  const legend = document.getElementById("tlLegend");
+  if (smart) {
+    bar.innerHTML = '<i style="background:#8fd19e"></i>'.repeat(7) + '<i style="background:#f0c14d"></i>'.repeat(10) + '<i style="background:#0576e8"></i>'.repeat(8);
+    legend.innerHTML = '<span><b style="background:#8fd19e"></b>недели</span><span><b style="background:#f0c14d"></b>дни</span><span><b style="background:#0576e8"></b>часы</span>';
+  } else {
+    bar.innerHTML = '<i style="background:#e6e8eb"></i>'.repeat(14) + '<i style="background:#0576e8"></i>'.repeat(12);
+    legend.innerHTML = '<span><b style="background:#e6e8eb"></b>удаляются ранние</span><span><b style="background:#0576e8"></b>хранятся последние</span>';
+  }
 }
 function schedText(t){
   if (t.sched_on === false) return "Выключено";
   const names=["Вс","Пн","Вт","Ср","Чт","Пт","Сб"];
   const days=(t.days||[0,1,2,3,4,5,6]).map(d=>names[d]).join(" ");
   const hh=String(t.hour??2).padStart(2,"0"), mm=String(t.min??0).padStart(2,"0");
-  const freq = Number(t.repeat||0) ? ("каждые "+t.repeat+" ч.") : "один раз";
+  const freq = Number(t.repeat||0) ? ("каждые "+t.repeat+" ч. до "+String(t.until_hour??23).padStart(2,"0")+":"+String(t.until_min??0).padStart(2,"0")) : "один раз";
   return days+", "+hh+":"+mm+", "+freq;
 }
 function rotText(t){
@@ -436,10 +511,10 @@ function showStep(){
   for (let i=1;i<=4;i++) document.getElementById("s"+i).classList.toggle("on", i===step);
   const titles=["Подключение","Базы и хранилище","Расписание","Ротация"];
   document.getElementById("wizTitle").textContent = "Мастер резервирования — " + titles[step-1];
-  document.getElementById("wizNext").textContent = step===4 ? (document.getElementById("runNowOn").checked ? "Создать и запустить" : "Создать") : "Далее";
+  document.getElementById("wizNext").textContent = step===4 ? (document.getElementById("runNowOn").checked ? (editing ? "Сохранить и запустить" : "Создать и запустить") : (editing ? "Сохранить" : "Создать")) : "Далее";
 }
 function syncCreateLabel(){
-  if (step===4) document.getElementById("wizNext").textContent = document.getElementById("runNowOn").checked ? "Создать и запустить" : "Создать";
+  if (step===4) showStep();
 }
 function renderDbs(dbs) {
   const el = document.getElementById("dbList");
@@ -479,7 +554,8 @@ async function testConn(){
     if (d.error){ msg.className="err"; msg.textContent = d.error; document.getElementById("dbList").innerHTML=""; return; }
     const dbs = d.dbs || [];
     msg.className="hint"; msg.textContent = "Доступно баз: " + dbs.length;
-    document.getElementById("dbList").innerHTML = dbs.map(db => '<label class="dbrow"><input type="checkbox" class="dbchk" value="'+esc(db)+'" onchange="updCount()"><span class="dbico"></span><span class="dbname">'+esc(db)+'</span></label>').join("") || '<div class="hint" style="padding:12px 16px">Пользовательских баз не найдено.</div>';
+    const picked = new Set(Array.from(document.querySelectorAll(".dbchk:checked")).map(x => x.value));
+    document.getElementById("dbList").innerHTML = dbs.map(db => '<label class="dbrow"><input type="checkbox" class="dbchk" '+(picked.has(db)?'checked':'')+' value="'+esc(db)+'" onchange="updCount()"><span class="dbico"></span><span class="dbname">'+esc(db)+'</span></label>').join("") || '<div class="hint" style="padding:12px 16px">Пользовательских баз не найдено.</div>';
     updCount();
     step = 2; showStep();
   } catch(e) {
@@ -494,38 +570,44 @@ async function saveTask(){
   const nas = document.getElementById("w_nas").value;
   if (!nas.startsWith("/volume")) { msg.className="err"; msg.textContent = "Выберите папку на NAS"; step = 2; showStep(); return; }
   const rep = document.querySelector('input[name=rep]:checked').value;
+  const smart = document.querySelector('input[name=rot]:checked').value === "smart";
+  const passTyped = document.getElementById("w_pass").value;
+  const smbTyped = document.getElementById("w_spass").value;
   const task = {
-    id: String(Date.now()),
+    id: editing || String(Date.now()),
     name: document.getElementById("w_name").value || document.getElementById("w_host").value || "MSSQL",
     host: document.getElementById("w_host").value,
     port: document.getElementById("w_port").value,
     user: document.getElementById("w_user").value,
-    pass: document.getElementById("w_pass").value,
+    pass: passTyped || (editing ? "********" : ""),
     dbs: dbs,
     sql_dir: document.getElementById("w_sql").value,
     smb_share: document.getElementById("w_share").value,
     smb_user: document.getElementById("w_suser").value,
-    smb_pass: document.getElementById("w_spass").value,
+    smb_pass: smbTyped || (editing ? "********" : ""),
     nas_dir: nas,
     sched_on: document.getElementById("schedOn").checked,
     days: Array.from(document.querySelectorAll(".day.on")).map(b => Number(b.dataset.d)),
-    hour: document.getElementById("w_hour").value,
-    min: document.getElementById("w_min").value,
+    hour: Number(document.getElementById("w_hour").value),
+    min: Number(document.getElementById("w_min").value),
     repeat: rep==="0" ? 0 : Number(document.getElementById("w_repeat").value),
+    until_hour: Number(document.getElementById("w_until_h").value),
+    until_min: Number(document.getElementById("w_until_m").value),
     rot_on: document.getElementById("rotOn").checked,
-    rot_mode: document.querySelector('input[name=rot]:checked').value,
-    keep: Number(document.getElementById("w_keep").value || 30)
+    rot_mode: smart ? "smart" : "count",
+    keep: Number((smart ? document.getElementById("w_keep_smart").value : document.getElementById("w_keep").value) || 30)
   };
+  const startNow = document.getElementById("runNowOn").checked;
   msg.className = "hint";
   msg.textContent = "Сохранение…";
   try {
-    const all = tasks.concat([task]);
+    const all = editing ? tasks.map(t => t.id===editing ? task : t) : tasks.concat([task]);
     const d = await api("/api/tasks", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({tasks: all})});
     msg.textContent = d.schedule || "Сохранено";
     closeWiz();
     await reloadAll();
     showTask(task.id);
-    if (document.getElementById("runNowOn").checked) await runNow(task.id, true);
+    if (startNow) await runNow(task.id, true);
   } catch(e) {
     msg.className="err"; msg.textContent = e.message;
   }

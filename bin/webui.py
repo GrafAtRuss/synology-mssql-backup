@@ -155,11 +155,15 @@ def task_due(task, now):
     hour = int(task.get("hour") or 0)
     minute = int(task.get("min") or 0)
     repeat = int(task.get("repeat") or 0)
+    if repeat <= 0:
+        return now.hour == hour and now.minute == minute
+    until_h = int(task.get("until_hour") if task.get("until_hour") is not None else 23)
+    until_m = int(task.get("until_min") or 0)
     if now.minute != minute:
         return False
-    if repeat <= 0:
-        return now.hour == hour
-    if now.hour < hour:
+    if now.hour < hour or now.hour > until_h:
+        return False
+    if now.hour == until_h and now.minute > until_m:
         return False
     return (now.hour - hour) % repeat == 0
 

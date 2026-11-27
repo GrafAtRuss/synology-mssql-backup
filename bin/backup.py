@@ -193,7 +193,11 @@ def rotate(task, nas_dir, db):
                 log("Удалён старый файл: %s" % os.path.basename(path))
         return
     if mode == "smart":
-        keep = set(smart_keep(files))
+        chosen = smart_keep(files)
+        n = int(task.get("keep") or 256)
+        if n > 0:
+            chosen = sorted(chosen, key=lambda p: os.path.getmtime(p), reverse=True)[:n]
+        keep = set(chosen)
     else:
         n = int(task.get("keep") or 30)
         if n <= 0:

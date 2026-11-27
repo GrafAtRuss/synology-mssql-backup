@@ -39,20 +39,52 @@ def parse_unc(unc):
         raise ValueError("SMB-шара должна быть вида \\\\сервер\\share")
     return parts[0], parts[1], parts[2:]
 
+def smb_bin():
+    for cand in ("/usr/bin/smbclient", "/bin/smbclient", "smbclient"):
+        if cand == "smbclient" or os.path.isfile(cand):
+            return cand
+    return ""
+
+def smb_conf():
+    os.makedirs(VAR, exist_ok=True)
+    path = os.path.join(VAR, "smb.conf")
+    content = "[global]\nclient min protocol = SMB2\nclient max protocol = SMB3\n"
+    try:
+        current = open(path, encoding="utf-8").read()
+    except Exception:
+        current = ""
+    if current != content:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+    return path
+
+def smb_noise(text):
+    kept = []
+    for line in (text or "").splitlines():
+        if "ldap ssl ads" in line or "smb.reserved.conf" in line or "lpcfg_do_global_parameter" in line:
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+def smb_run(host, share, user, password, command):
+    smb = smb_bin()
+    if not smb:
+        raise RuntimeError("smbclient не найден в DSM")
+    auth = "%s%%%s" % (user, password) if user else "%"
+    env = dict(os.environ, HOME=VAR, USERPROFILE=VAR)
+    cmd = [smb, "//%s/%s" % (host, share), "-s", smb_conf(), "-U", auth, "-c", command]
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, env=env)
+    raw = ((p.stdout or "") + "\n" + (p.stderr or "")).strip()
+    return p.returncode, smb_noise(raw), raw
+
 def smb_get(unc, user, password, filename, dest):
     host, share, subs = parse_unc(unc)
     remote = "/".join(subs + [filename]) if subs else filename
-    smb = None
-    for cand in ("/usr/bin/smbclient", "/bin/smbclient", "smbclient"):
-        if cand == "smbclient" or os.path.isfile(cand):
-            smb = cand
-            break
-    auth = "%s%%%s" % (user, password) if user else "%"
-    cmd = [smb, "//%s/%s" % (host, share), "-U", auth, "-c", "get %s %s" % (remote, dest)]
-    log("smbclient get %s -> %s" % (remote, dest))
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    if p.returncode != 0:
-        raise RuntimeError((p.stderr or p.stdout or "smbclient error").strip()[:800])
+    log("smbclient get //%s/%s/%s -> %s" % (host, share, remote, dest))
+    rc, clean, raw = smb_run(host, share, user, password, 'get "%s" "%s"' % (remote, dest))
+    if os.path.isfile(dest) and os.path.getsize(dest) > 0 and "NT_STATUS_" not in raw:
+        return
+    raise RuntimeError(clean or "smbclient не скопировал файл")
 
 def backup_one(task, db):
     host = task.get("host") or ""
@@ -210,19 +242,10 @@ def run_logged(cmd, timeout):
 def smb_put(unc, user, password, local, filename):
     host, share, subs = parse_unc(unc)
     remote = "/".join(subs + [filename]) if subs else filename
-    smb = None
-    for cand in ("/usr/bin/smbclient", "/bin/smbclient", "smbclient"):
-        if cand == "smbclient" or os.path.isfile(cand):
-            smb = cand
-            break
-    if not smb:
-        raise RuntimeError("smbclient не найден в DSM")
-    auth = "%s%%%s" % (user, password) if user else "%"
-    cmd = [smb, "//%s/%s" % (host, share), "-U", auth, "-c", 'put "%s" "%s"' % (local, remote)]
     log("smbclient put %s -> //%s/%s/%s" % (os.path.basename(local), host, share, remote))
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, env=dict(os.environ, HOME=VAR, USERPROFILE=VAR))
-    if p.returncode != 0:
-        raise RuntimeError((p.stderr or p.stdout or "smbclient error").strip()[:800])
+    rc, clean, raw = smb_run(host, share, user, password, 'put "%s" "%s"' % (local, remote))
+    if rc != 0 or "NT_STATUS_" in raw:
+        raise RuntimeError(clean or "smbclient не записал файл")
 
 def sql_exec(host, port, user, password, query, timeout=7200):
     sqlcmd = sqlcmd_bin()

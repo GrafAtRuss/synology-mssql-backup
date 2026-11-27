@@ -35,6 +35,13 @@ html,body { margin:0; height:100%; font:13px/1.45 "Segoe UI", system-ui, Arial, 
 .foot { border-top:1px solid var(--line); background:#fff; color:#8a9099; font-size:11px; text-align:center; padding:6px 10px; }
 .foot a { color:#0576e8; }
 pre.log { background:#1e1e1e; color:#d6d6d6; padding:10px; border-radius:4px; max-height:160px; overflow:auto; font-size:12px; margin:12px 0 0; }
+.prog { margin:12px 0 0; }
+.prog-top { display:flex; justify-content:space-between; align-items:baseline; gap:12px; font-size:12px; margin-bottom:6px; }
+.prog-top b { font-variant-numeric:tabular-nums; }
+.prog-track { height:10px; background:#e4e8ee; border-radius:5px; overflow:hidden; }
+.prog-bar { height:100%; width:0; background:#0576e8; border-radius:5px; transition:width .35s ease; }
+.prog-bar.err { background:#d53b3b; }
+.prog-bar.ok { background:#2f9e44; }
 .mask { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:center; justify-content:center; z-index:20; }
 .mask.on { display:flex; }
 .wiz { width:760px; max-width:calc(100vw - 32px); background:#fff; border-radius:4px; box-shadow:0 12px 40px rgba(0,0,0,.28); overflow:hidden; }
@@ -177,6 +184,7 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
             <div class="indent hint">Почасовые копии за последние сутки, ежедневные за месяц, еженедельные — старше.</div>
           </div>
         </div>
+        <label class="checkline" style="margin-top:14px"><input type="checkbox" id="runNowOn" checked onchange="syncCreateLabel()"> Запустить резервное копирование сразу после создания</label>
         <div id="saveMsg" class="hint"></div>
       </div>
     </div>
@@ -273,11 +281,13 @@ function showTask(id){
   document.getElementById("main").innerHTML =
     '<div class="banner"><div class="badge">&#128337;</div><div style="flex:1"><b>'+esc(t.name||"Задача")+'</b>'+
     '<div class="hint">Последний запуск смотрите в журнале. SQL пишет файл локально, NAS забирает его по SMB.</div>'+
-    '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="runNow(\''+esc(t.id)+'\')">Резервировать сейчас</button><button class="btn sec" onclick="openRestore()">Восстановить</button><button class="btn sec" onclick="deleteTask()">Удалить</button></div></div></div>'+
+    '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="runNow(\''+esc(t.id)+'\')">Резервировать сейчас</button><button class="btn sec" onclick="openRestore()">Восстановить</button><button class="btn sec" onclick="deleteTask()">Удалить</button></div>'+
+    '<div class="prog" id="prog" style="display:none"><div class="prog-top"><span id="progMsg">Ожидание</span><b id="progPct">0%</b></div><div class="prog-track"><div class="prog-bar" id="progBar"></div></div></div></div></div>'+
     '<div class="grid"><div class="card"><h3>Источник</h3><div class="pad kv"><div>Хост</div><div>'+esc(t.host)+':'+esc(t.port)+'</div><div>Базы</div><div>'+esc((t.dbs||[]).join(", ")||"—")+'</div><div>Папка SQL</div><div>'+esc(t.sql_dir)+'</div></div></div>'+
     '<div class="card"><h3>Назначение</h3><div class="pad kv"><div>SMB</div><div>'+esc(t.smb_share||"—")+'</div><div>Папка NAS</div><div>'+esc(t.nas_dir)+'</div><div>Ротация</div><div>'+esc(rotText(t))+'</div><div>Расписание</div><div>'+esc(schedText(t))+'</div></div></div></div>'+
     '<pre class="log" id="log">Загрузка журнала…</pre>';
   api("/api/logs").then(d => { const n=document.getElementById("log"); if(n) n.textContent = d.logs || "(пусто)"; }).catch(()=>{});
+  refreshProgress();
 }
 
 function openWiz(){
@@ -426,7 +436,10 @@ function showStep(){
   for (let i=1;i<=4;i++) document.getElementById("s"+i).classList.toggle("on", i===step);
   const titles=["Подключение","Базы и хранилище","Расписание","Ротация"];
   document.getElementById("wizTitle").textContent = "Мастер резервирования — " + titles[step-1];
-  document.getElementById("wizNext").textContent = step===4 ? "Создать" : "Далее";
+  document.getElementById("wizNext").textContent = step===4 ? (document.getElementById("runNowOn").checked ? "Создать и запустить" : "Создать") : "Далее";
+}
+function syncCreateLabel(){
+  if (step===4) document.getElementById("wizNext").textContent = document.getElementById("runNowOn").checked ? "Создать и запустить" : "Создать";
 }
 function renderDbs(dbs) {
   const el = document.getElementById("dbList");
@@ -512,6 +525,7 @@ async function saveTask(){
     closeWiz();
     await reloadAll();
     showTask(task.id);
+    if (document.getElementById("runNowOn").checked) await runNow(task.id, true);
   } catch(e) {
     msg.className="err"; msg.textContent = e.message;
   }
@@ -635,11 +649,36 @@ async function startRestore(){
   } catch(e) { msg.className="err"; msg.textContent=e.message; }
 }
 
-async function runNow(id){
+async function refreshProgress(){
+  if (!selected) return;
+  try {
+    const d = await api("/api/status");
+    const box = document.getElementById("prog");
+    if (!box) return;
+    const mine = !d.task_id || String(d.task_id) === String(selected);
+    const fresh = (Date.now()/1000 - (d.updated || 0)) < 1200;
+    if (!mine || (!d.running && !fresh)) { box.style.display = "none"; return; }
+    box.style.display = "block";
+    const pct = Math.max(0, Math.min(100, Number(d.percent) || 0));
+    const bar = document.getElementById("progBar");
+    bar.style.width = pct + "%";
+    bar.className = "prog-bar" + (d.phase === "error" ? " err" : (d.phase === "done" && !d.running ? " ok" : ""));
+    document.getElementById("progPct").textContent = pct + "%";
+    document.getElementById("progMsg").textContent = d.message || (d.running ? "Выполняется" : "Готово");
+    if (d.running) {
+      const logs = await api("/api/logs");
+      const n = document.getElementById("log");
+      if (n && logs.logs) { n.textContent = logs.logs; n.scrollTop = n.scrollHeight; }
+    }
+  } catch(e) {}
+}
+setInterval(refreshProgress, 2000);
+
+async function runNow(id, silent){
   try {
     const d = await api("/api/backup", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id:id})});
-    alert(d.msg || "Запущено");
-    setTimeout(() => showTask(id), 1200);
+    if (!silent) alert(d.msg || "Запущено");
+    setTimeout(refreshProgress, 400);
   } catch(e) { alert(e.message); }
 }
 async function installSql(){

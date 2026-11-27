@@ -277,6 +277,17 @@ class H(BaseHTTPRequestHandler):
                     text = f.read()[-30000:]
             self._send(200, {"logs": text})
             return
+        if path == "/api/status":
+            status = {"running": False, "percent": 0, "message": "", "phase": "", "task_id": ""}
+            path_status = os.path.join(VAR, "status.json")
+            if os.path.isfile(path_status):
+                try:
+                    with open(path_status, encoding="utf-8") as f:
+                        status.update(json.load(f))
+                except Exception:
+                    pass
+            self._send(200, status)
+            return
         if path == "/api/browse":
             q = parse_qs(urlparse(self.path).query)
             raw = (q.get("path") or ["/"])[0]

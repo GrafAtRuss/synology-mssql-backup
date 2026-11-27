@@ -12,6 +12,34 @@ def sqlcmd_bin():
     return path if os.path.isfile(path) else ""
 
 
+STATUS = os.path.join(VAR, "status.json")
+_status_lock = threading.Lock()
+
+def set_status(**kw):
+    data = {
+        "running": bool(kw.get("running")),
+        "task_id": str(kw.get("task_id") or ""),
+        "db": kw.get("db") or "",
+        "percent": int(kw.get("percent") or 0),
+        "phase": kw.get("phase") or "",
+        "message": kw.get("message") or "",
+        "updated": time.time(),
+    }
+    try:
+        os.makedirs(VAR, exist_ok=True)
+        with _status_lock:
+            tmp = STATUS + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, STATUS)
+    except Exception:
+        pass
+
+def mark(task, db, index, total, frac, phase, message):
+    total = max(int(total or 1), 1)
+    overall = int(round(((index + max(0.0, min(1.0, frac))) / total) * 100))
+    set_status(running=True, task_id=task.get("id"), db=db, percent=overall, phase=phase, message=message)
+
 def log(msg):
     line = "%s %s" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg)
     print(line, flush=True)
@@ -86,7 +114,7 @@ def smb_get(unc, user, password, filename, dest):
         return
     raise RuntimeError(clean or "smbclient не скопировал файл")
 
-def backup_one(task, db):
+def backup_one(task, db, index=0, total=1):
     host = task.get("host") or ""
     port = str(task.get("port") or "1433")
     user = task.get("user") or ""
@@ -98,6 +126,7 @@ def backup_one(task, db):
     remote = win_join(sql_dir, filename)
     ident = sql_ident(db)
     folder = sql_dir.rstrip("\\/").replace("'", "''")
+    mark(task, db, index, total, 0.02, "prepare", "Подготовка %s" % db)
     code, out = sql_exec(host, port, user, password, "EXEC master.dbo.xp_create_subdir N'%s'" % folder, timeout=60)
     if code != 0:
         log("Папку %s заранее создать не удалось: %s" % (sql_dir, (out or "")[-400:]))
@@ -109,11 +138,21 @@ def backup_one(task, db):
     if not sqlcmd:
         raise RuntimeError("sqlcmd не найден в пакете")
     log("BACKUP %s -> %s" % (db, remote))
+    mark(task, db, index, total, 0.05, "backup", "Резервное копирование %s" % db)
+    pct_rx = re.compile(r"(\d+)\s*(?:проц|percent)", re.I)
+
+    def on_line(line):
+        found = pct_rx.search(line or "")
+        if not found:
+            return
+        frac = 0.05 + (int(found.group(1)) / 100.0) * 0.75
+        mark(task, db, index, total, frac, "backup", "%s — %s%%" % (db, found.group(1)))
+
     cmd = [sqlcmd, "-S", "%s,%s" % (host, port), "-U", user, "-P", password, "-C", "-l", "30", "-b", "-Q"]
-    rc, out = run_logged(cmd + [query_comp], 7200)
+    rc, out = run_logged(cmd + [query_comp], 7200, on_line)
     if rc != 0 and ("1844" in (out or "") or "COMPRESSION" in (out or "").upper() or "сжат" in (out or "").lower()):
         log("Редакция SQL не умеет COMPRESSION, повтор без сжатия на сервере")
-        rc, out = run_logged(cmd + [query_plain], 7200)
+        rc, out = run_logged(cmd + [query_plain], 7200, on_line)
     if rc != 0:
         text = out or ""
         if "3201" in text or "операционной системы 3" in text.lower() or "cannot find the path" in text.lower():
@@ -123,12 +162,15 @@ def backup_one(task, db):
     dest = os.path.join(nas_dir, filename)
     unc = (task.get("smb_share") or "").strip()
     if unc:
+        mark(task, db, index, total, 0.86, "copy", "Копирование %s на NAS" % db)
         smb_get(unc, task.get("smb_user") or "", task.get("smb_pass") or "", filename, dest)
         log("Файл скопирован на NAS: %s" % dest)
+        mark(task, db, index, total, 0.94, "archive", "Архивация %s" % db)
         archive_copy(dest)
     else:
         log("SMB-шара не задана. Файл остался на SQL Server: %s" % remote)
     rotate(task, nas_dir, db)
+    mark(task, db, index, total, 1.0, "done", "База %s готова" % db)
 def rotate(task, nas_dir, db):
     if task.get("rot_on") is False or not os.path.isdir(nas_dir):
         return
@@ -211,7 +253,7 @@ def unpack_archive(path):
         raise RuntimeError("не удалось распаковать архив: %s" % err)
     return raw, True
 
-def run_logged(cmd, timeout):
+def run_logged(cmd, timeout, on_line=None):
     env = dict(os.environ, HOME=VAR, USERPROFILE=VAR)
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     chunks = []
@@ -223,6 +265,11 @@ def run_logged(cmd, timeout):
                 continue
             chunks.append(line)
             log(line)
+            if on_line:
+                try:
+                    on_line(line)
+                except Exception:
+                    pass
 
     threading.Thread(target=reader, daemon=True).start()
     started = time.time()
@@ -357,13 +404,16 @@ def main():
         if only and str(task.get("id")) != only:
             continue
         name = task.get("name") or task.get("host") or "task"
+        dbs = task.get("dbs") or []
         log("=== Задача %s ===" % name)
-        for db in task.get("dbs") or []:
+        set_status(running=True, task_id=task.get("id"), percent=0, phase="start", message="Запуск «%s»" % name)
+        for i, db in enumerate(dbs):
             try:
-                backup_one(task, db)
+                backup_one(task, db, i, len(dbs) or 1)
             except Exception as e:
                 rc = 1
                 log("Ошибка %s: %s" % (db, e))
+    set_status(running=False, task_id=only, percent=0 if rc else 100, phase="error" if rc else "done", message="Завершено с ошибкой" if rc else "Готово")
     log("Готово")
     return rc
 

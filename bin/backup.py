@@ -272,21 +272,51 @@ def archive_copy(dest):
     os.remove(dest)
     log("Архив на NAS: %s" % os.path.basename(gz))
 
-def unpack_archive(path):
-    if not path.endswith(".gz"):
+def unpack_archive(path, on_progress=None):
+    if not str(path).lower().endswith(".gz"):
         return path, False
-    raw = os.path.join(VAR, "restore-%s" % os.path.basename(path)[:-3])
-    log("Распаковка %s" % os.path.basename(path))
+    folder = os.path.dirname(path) or VAR
+    if not os.access(folder, os.W_OK):
+        folder = VAR
+    base = os.path.basename(path)
+    if base.lower().endswith(".gz"):
+        base = base[:-3]
+    raw = os.path.join(folder, ".restore-%s-%s" % (os.getpid(), base))
+    err_path = raw + ".err"
+    log("Распаковка %s, временный файл %s" % (os.path.basename(path), raw))
+    proc = None
     try:
-        with open(raw, "wb") as out:
-            p = subprocess.run(["gzip", "-dc", path], stdout=out, stderr=subprocess.PIPE, timeout=7200)
-        if p.returncode != 0:
-            err = (p.stderr or b"").decode("utf-8", "replace")[:300]
-            raise RuntimeError("не удалось распаковать архив: %s" % err)
+        with open(raw, "wb") as out, open(err_path, "wb") as err:
+            proc = subprocess.Popen(
+                ["gzip", "-dc", path], stdout=out, stderr=err,
+                env=dict(os.environ, HOME=VAR, USERPROFILE=VAR))
+            last = 0
+            while True:
+                rc = proc.poll()
+                size = os.path.getsize(raw) if os.path.isfile(raw) else 0
+                if on_progress and (size - last >= 64 * 1048576 or rc is not None):
+                    on_progress(size)
+                    last = size
+                if rc is not None:
+                    break
+                time.sleep(1)
+            if proc.returncode != 0:
+                err_txt = ""
+                try:
+                    err_txt = open(err_path, "rb").read().decode("utf-8", "replace")[:300]
+                except OSError:
+                    pass
+                raise RuntimeError(err_txt or "gzip завершился с кодом %s" % proc.returncode)
+        size = os.path.getsize(raw)
+        log("Распаковано %d МБ" % (size // 1048576))
+        return raw, True
     except Exception:
+        if proc and proc.poll() is None:
+            proc.kill()
         remove_file(raw)
         raise
-    return raw, True
+    finally:
+        remove_file(err_path)
 
 def run_logged(cmd, timeout, on_line=None):
     env = dict(os.environ, HOME=VAR, USERPROFILE=VAR)
@@ -297,6 +327,8 @@ def run_logged(cmd, timeout, on_line=None):
         for line in proc.stdout:
             line = line.strip()
             if not line:
+                continue
+            if "home directory" in line or "Install/Create/Query" in line:
                 continue
             chunks.append(line)
             log(line)
@@ -381,11 +413,14 @@ def restore_job(job):
         progress(2, "prepare", "Подготовка восстановления %s" % dbname)
         log("=== Восстановление %s на %s ===" % (os.path.basename(bak), host))
         progress(8, "unpack", "Распаковка архива")
-        local, temporary = unpack_archive(bak)
+        def on_unpack(size):
+            progress(8, "unpack", "Распаковка, %d МБ" % (size // 1048576))
+        local, temporary = unpack_archive(bak, on_unpack)
         filename = os.path.basename(local)
         if not filename.lower().endswith(".bak"):
             filename += ".bak"
-        progress(15, "copy", "Копирование на Microsoft SQL Server")
+        copied = os.path.getsize(local) // 1048576 if os.path.isfile(local) else 0
+        progress(15, "copy", "Копирование %d МБ на Microsoft SQL Server" % copied)
         smb_put(job.get("smb_share") or "", job.get("smb_user") or "", job.get("smb_pass") or "", local, filename)
         uploaded = True
         progress(28, "restore", "Чтение состава копии")

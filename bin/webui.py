@@ -224,6 +224,23 @@ def sql_ident(name):
         raise ValueError("bad database name")
     return name.replace("]", "]]")
 
+def task_by_id(task_id):
+    for t in read_tasks():
+        if str(t.get("id")) == str(task_id or ""):
+            return t
+    return None
+
+
+def fill_secret(data, field):
+    val = data.get(field) or ""
+    if val and val != "********":
+        return val
+    src = task_by_id(data.get("task_id"))
+    if src and src.get(field):
+        return src.get(field)
+    return val
+
+
 def run_sql(host, port, user, password, query, timeout=25):
     path = sqlcmd_bin()
     if not path:
@@ -314,7 +331,7 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/list_dbs":
             code, out, err = run_sql(
                 data.get("host", ""), data.get("port", "1433"),
-                data.get("user", ""), data.get("pass", ""),
+                data.get("user", ""), fill_secret(data, "pass"),
                 "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE database_id > 4 AND state = 0 ORDER BY name;")
             if code != 0:
                 self._send(200, {"dbs": [], "error": err or out or ("код %s" % code)})
@@ -358,6 +375,8 @@ class H(BaseHTTPRequestHandler):
             if not bak.startswith("/volume") or not os.path.isfile(bak) or not (low.endswith(".bak") or low.endswith(".bak.gz")):
                 self._send(200, {"ok": False, "msg": "Выберите файл .bak на томе NAS"})
                 return
+            data["pass"] = fill_secret(data, "pass")
+            data["smb_pass"] = fill_secret(data, "smb_pass")
             if not (data.get("host") and data.get("user") and data.get("dbname") and data.get("smb_share") and data.get("sql_dir")):
                 self._send(200, {"ok": False, "msg": "Заполните сервер, имя базы, папку SQL и SMB-шару"})
                 return

@@ -109,7 +109,7 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
   <aside class="side">
     <div class="tb">
       <button class="primary" title="Создать" onclick="openWiz()">+</button>
-      <button title="Восстановить на другой сервер" onclick="openRestore()">&#8617;</button>
+      <button title="Восстановить на Microsoft SQL Server" onclick="openRestore()">&#8617;</button>
       <button title="Удалить задачу" onclick="deleteTask()">&#10005;</button>
       <button title="Обновить" onclick="reloadAll()">&#8635;</button>
       <button title="Проверить sqlcmd" onclick="installSql()">&#8681;</button>
@@ -242,20 +242,22 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
         </div>
       </div>
       <div class="step" id="r3">
-        <label>Хост другого SQL Server</label><input id="r_host" placeholder="192.168.1.20">
+        <div class="hint">Значения из задания. Любое поле можно изменить.</div>
+        <label>Хост Microsoft SQL Server</label><input id="r_host" placeholder="192.168.1.20">
         <label>Порт</label><input id="r_port" value="1433">
         <label>Пользователь</label><input id="r_user">
-        <label>Пароль</label><input id="r_pass" type="password">
+        <label>Пароль</label><input id="r_pass" type="password" placeholder="из задания">
         <div style="margin-top:12px"><button class="btn sec" type="button" onclick="testRestore()">Проверить подключение</button></div>
         <div id="rConn" class="hint"></div>
       </div>
       <div class="step" id="r4">
-        <label>Имя базы на этом сервере</label><input id="r_db" placeholder="contracts">
-        <label>Папка на целевом SQL Server</label><input id="r_sql" value="C:\SQLBackups">
+        <div class="hint">Имя базы и пути из задания. Их можно изменить перед восстановлением.</div>
+        <label>Имя базы на Microsoft SQL Server</label><input id="r_db" placeholder="contracts">
+        <label>Папка на Microsoft SQL Server</label><input id="r_sql" value="C:\SQLBackups">
         <div class="hint">Сюда кладётся .bak и файлы базы. Служба SQL должна иметь права на папку.</div>
         <label>SMB-шара этой папки</label><input id="r_share" placeholder="\\192.168.1.20\SQLBackups">
         <label>Пользователь SMB</label><input id="r_suser">
-        <label>Пароль SMB</label><input id="r_spass" type="password">
+        <label>Пароль SMB</label><input id="r_spass" type="password" placeholder="из задания">
         <div id="rMsg" class="hint"></div>
       </div>
     </div>
@@ -629,7 +631,7 @@ let rstep = 1;
 function closeRestore(){ document.getElementById("rmask").classList.remove("on"); }
 function showRStep(){
   for (let i=1;i<=4;i++) document.getElementById("r"+i).classList.toggle("on", i===rstep);
-  const titles=["База задачи","Дата копии","Другой сервер","Куда восстановить"];
+  const titles=["База задачи","Дата копии","Microsoft SQL Server","Куда восстановить"];
   document.getElementById("rTitle").textContent = "Мастер восстановления — " + titles[rstep-1];
   document.getElementById("rNext").textContent = rstep===4 ? "Восстановить" : "Далее";
 }
@@ -637,10 +639,15 @@ function openRestore(){
   const t = tasks.find(x => x.id===selected);
   if (!t) { alert("Сначала выберите задачу"); return; }
   rstep = 1;
-  ["r_host","r_user","r_pass","r_share","r_suser","r_spass"].forEach(id => document.getElementById(id).value="");
-  document.getElementById("r_port").value="1433";
-  document.getElementById("r_sql").value="C:\\SQLBackups";
-  document.getElementById("r_db").value="";
+  document.getElementById("r_host").value = t.host || "";
+  document.getElementById("r_port").value = t.port || "1433";
+  document.getElementById("r_user").value = t.user || "";
+  document.getElementById("r_pass").value = t.pass ? "********" : "";
+  document.getElementById("r_sql").value = t.sql_dir || "C:\\SQLBackups";
+  document.getElementById("r_share").value = t.smb_share || "";
+  document.getElementById("r_suser").value = t.smb_user || "";
+  document.getElementById("r_spass").value = t.smb_pass ? "********" : "";
+  document.getElementById("r_db").value = (t.dbs && t.dbs.length === 1) ? t.dbs[0] : "";
   document.getElementById("rConn").textContent="";
   document.getElementById("rConn").className="hint";
   document.getElementById("rMsg").textContent="";
@@ -695,6 +702,7 @@ async function testRestore(){
   msg.className="hint"; msg.textContent="Подключение…";
   try {
     const d = await api("/api/list_dbs", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      task_id: selected,
       host: document.getElementById("r_host").value,
       port: document.getElementById("r_port").value,
       user: document.getElementById("r_user").value,
@@ -713,6 +721,7 @@ async function startRestore(){
   msg.className="hint"; msg.textContent="Запуск…";
   try {
     const d = await api("/api/restore", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
+      task_id: selected,
       bak: picked.value,
       host: document.getElementById("r_host").value,
       port: document.getElementById("r_port").value,

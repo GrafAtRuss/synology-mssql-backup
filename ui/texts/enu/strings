@@ -1,5 +1,5 @@
 [app]
-displayname="MSSQL Backup"
+displayname="Synology Microsoft SQL Backup & Restore"
 description="Microsoft SQL Server backup"
 
 [locale]

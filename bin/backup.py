@@ -105,6 +105,26 @@ def smb_run(host, share, user, password, command):
     raw = ((p.stdout or "") + "\n" + (p.stderr or "")).strip()
     return p.returncode, smb_noise(raw), raw
 
+def smb_del(unc, user, password, filename):
+    host, share, subs = parse_unc(unc)
+    remote = "/".join(subs + [filename]) if subs else filename
+    log("smbclient del //%s/%s/%s" % (host, share, remote))
+    rc, clean, raw = smb_run(host, share, user, password, 'del "%s"' % remote)
+    if rc != 0 or "NT_STATUS_" in raw:
+        log("Не удалось удалить временный файл: %s" % ((clean or raw)[-300:]))
+        return False
+    log("Временный файл удалён: %s" % remote)
+    return True
+
+def remove_file(path):
+    if not path:
+        return
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError as e:
+        log("Не удалось удалить %s: %s" % (path, e))
+
 def smb_get(unc, user, password, filename, dest):
     host, share, subs = parse_unc(unc)
     remote = "/".join(subs + [filename]) if subs else filename
@@ -112,6 +132,7 @@ def smb_get(unc, user, password, filename, dest):
     rc, clean, raw = smb_run(host, share, user, password, 'get "%s" "%s"' % (remote, dest))
     if os.path.isfile(dest) and os.path.getsize(dest) > 0 and "NT_STATUS_" not in raw:
         return
+    remove_file(dest)
     raise RuntimeError(clean or "smbclient не скопировал файл")
 
 def backup_one(task, db, index=0, total=1):
@@ -149,22 +170,28 @@ def backup_one(task, db, index=0, total=1):
         mark(task, db, index, total, frac, "backup", "%s — %s%%" % (db, found.group(1)))
 
     cmd = [sqlcmd, "-S", "%s,%s" % (host, port), "-U", user, "-P", password, "-C", "-l", "30", "-b", "-Q"]
-    rc, out = run_logged(cmd + [query_comp], 7200, on_line)
-    if rc != 0 and ("1844" in (out or "") or "COMPRESSION" in (out or "").upper() or "сжат" in (out or "").lower()):
-        log("Редакция SQL не умеет COMPRESSION, повтор без сжатия на сервере")
-        rc, out = run_logged(cmd + [query_plain], 7200, on_line)
-    if rc != 0:
-        text = out or ""
-        if "3201" in text or "операционной системы 3" in text.lower() or "cannot find the path" in text.lower():
-            raise RuntimeError("На сервере %s нет пути %s. Создайте эту папку на локальном диске SQL Server и дайте службе SQL право записи, либо укажите уже существующий каталог." % (host, sql_dir))
-        raise RuntimeError("BACKUP завершился с кодом %s" % rc)
+    unc = (task.get("smb_share") or "").strip()
+    try:
+        rc, out = run_logged(cmd + [query_comp], 7200, on_line)
+        if rc != 0 and ("1844" in (out or "") or "COMPRESSION" in (out or "").upper() or "сжат" in (out or "").lower()):
+            log("Редакция SQL не умеет COMPRESSION, повтор без сжатия на сервере")
+            rc, out = run_logged(cmd + [query_plain], 7200, on_line)
+        if rc != 0:
+            text = out or ""
+            if "3201" in text or "операционной системы 3" in text.lower() or "cannot find the path" in text.lower():
+                raise RuntimeError("На сервере %s нет пути %s. Создайте эту папку на локальном диске SQL Server и дайте службе SQL право записи, либо укажите уже существующий каталог." % (host, sql_dir))
+            raise RuntimeError("BACKUP завершился с кодом %s" % rc)
+    except Exception:
+        if unc:
+            smb_del(unc, task.get("smb_user") or "", task.get("smb_pass") or "", filename)
+        raise
     os.makedirs(nas_dir, exist_ok=True)
     dest = os.path.join(nas_dir, filename)
-    unc = (task.get("smb_share") or "").strip()
     if unc:
         mark(task, db, index, total, 0.86, "copy", "Копирование %s на NAS" % db)
         smb_get(unc, task.get("smb_user") or "", task.get("smb_pass") or "", filename, dest)
         log("Файл скопирован на NAS: %s" % dest)
+        smb_del(unc, task.get("smb_user") or "", task.get("smb_pass") or "", filename)
         mark(task, db, index, total, 0.94, "archive", "Архивация %s" % db)
         archive_copy(dest)
     else:
@@ -250,11 +277,15 @@ def unpack_archive(path):
         return path, False
     raw = os.path.join(VAR, "restore-%s" % os.path.basename(path)[:-3])
     log("Распаковка %s" % os.path.basename(path))
-    with open(raw, "wb") as out:
-        p = subprocess.run(["gzip", "-dc", path], stdout=out, stderr=subprocess.PIPE, timeout=7200)
-    if p.returncode != 0:
-        err = (p.stderr or b"").decode("utf-8", "replace")[:300]
-        raise RuntimeError("не удалось распаковать архив: %s" % err)
+    try:
+        with open(raw, "wb") as out:
+            p = subprocess.run(["gzip", "-dc", path], stdout=out, stderr=subprocess.PIPE, timeout=7200)
+        if p.returncode != 0:
+            err = (p.stderr or b"").decode("utf-8", "replace")[:300]
+            raise RuntimeError("не удалось распаковать архив: %s" % err)
+    except Exception:
+        remove_file(raw)
+        raise
     return raw, True
 
 def run_logged(cmd, timeout, on_line=None):
@@ -334,68 +365,111 @@ def restore_job(job):
     user = job.get("user") or ""
     password = job.get("pass") or ""
     dbname = job.get("dbname") or ""
+    task_id = job.get("task_id") or ""
     sql_dir = (job.get("sql_dir") or r"C:\SQLBackups").rstrip("\\/")
     ident = sql_ident(dbname)
-    local, temporary = unpack_archive(bak)
-    filename = os.path.basename(local)
-    if not filename.lower().endswith(".bak"):
-        filename += ".bak"
-    log("=== Восстановление %s на %s ===" % (os.path.basename(bak), host))
+    local = None
+    temporary = False
+    uploaded = False
+    filename = ""
+    pct_rx = re.compile(r"(\d+)\s*(?:проц|percent)", re.I)
+
+    def progress(percent, phase, message):
+        set_status(running=True, task_id=task_id, db=dbname, percent=percent, phase=phase, message=message)
+
     try:
+        progress(2, "prepare", "Подготовка восстановления %s" % dbname)
+        log("=== Восстановление %s на %s ===" % (os.path.basename(bak), host))
+        progress(8, "unpack", "Распаковка архива")
+        local, temporary = unpack_archive(bak)
+        filename = os.path.basename(local)
+        if not filename.lower().endswith(".bak"):
+            filename += ".bak"
+        progress(15, "copy", "Копирование на Microsoft SQL Server")
         smb_put(job.get("smb_share") or "", job.get("smb_user") or "", job.get("smb_pass") or "", local, filename)
+        uploaded = True
+        progress(28, "restore", "Чтение состава копии")
+        remote = win_join(sql_dir, filename)
+        code, out = sql_exec(host, port, user, password,
+                             "RESTORE FILELISTONLY FROM DISK = N'%s'" % remote.replace("'", "''"), timeout=600)
+        log(out[-1500:] if out else "FILELISTONLY без вывода")
+        if code != 0:
+            raise RuntimeError("FILELISTONLY завершился с кодом %s" % code)
+        files = parse_filelist(out)
+        if not files:
+            raise RuntimeError("Не удалось прочитать состав копии")
+        moves = []
+        data_i = 0
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", dbname) or "db"
+        for logical, kind in files:
+            if kind == "L":
+                ext = "_log.ldf"
+            elif data_i == 0:
+                ext = ".mdf"
+                data_i += 1
+            else:
+                ext = "_%d.ndf" % data_i
+                data_i += 1
+            dest = sql_dir + "\\" + safe + ext
+            moves.append("MOVE N'%s' TO N'%s'" % (logical.replace("'", "''"), dest.replace("'", "''")))
+        disk = remote.replace("'", "''")
+        batch = (
+            "IF DB_ID(N'%s') IS NOT NULL ALTER DATABASE [%s] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
+            "RESTORE DATABASE [%s] FROM DISK = N'%s' WITH %s, REPLACE, STATS = 10; "
+            "IF DB_ID(N'%s') IS NOT NULL ALTER DATABASE [%s] SET MULTI_USER;"
+        ) % (ident.replace("'", "''"), ident, ident, disk, ", ".join(moves), ident.replace("'", "''"), ident)
+        log("RESTORE DATABASE [%s]" % ident)
+        progress(30, "restore", "Восстановление %s" % dbname)
+        sqlcmd = sqlcmd_bin()
+        if not sqlcmd:
+            raise RuntimeError("sqlcmd не найден в пакете")
+
+        def on_line(line):
+            found = pct_rx.search(line or "")
+            if not found:
+                return
+            percent = 30 + int(int(found.group(1)) * 0.65)
+            progress(percent, "restore", "Восстановление %s — %s%%" % (dbname, found.group(1)))
+
+        cmd = [sqlcmd, "-S", "%s,%s" % (host, port), "-U", user, "-P", password,
+               "-C", "-l", "30", "-b", "-Q", batch]
+        code, out = run_logged(cmd, 7200, on_line)
+        if code != 0:
+            raise RuntimeError("RESTORE завершился с кодом %s" % code)
+        log("Восстановление завершено: %s на %s" % (dbname, host))
+        if temporary:
+            remove_file(local)
+            temporary = False
+        if uploaded and filename:
+            smb_del(job.get("smb_share") or "", job.get("smb_user") or "", job.get("smb_pass") or "", filename)
+            uploaded = False
+        set_status(running=False, task_id=task_id, db=dbname, percent=100, phase="done",
+                   message="Восстановление завершено: %s" % dbname)
     finally:
         if temporary:
+            remove_file(local)
+        if uploaded and filename:
             try:
-                os.remove(local)
-            except OSError:
-                pass
-    remote = win_join(sql_dir, filename)
-    code, out = sql_exec(host, port, user, password,
-                         "RESTORE FILELISTONLY FROM DISK = N'%s'" % remote.replace("'", "''"), timeout=600)
-    log(out[-1500:] if out else "FILELISTONLY без вывода")
-    if code != 0:
-        raise RuntimeError("FILELISTONLY завершился с кодом %s" % code)
-    files = parse_filelist(out)
-    if not files:
-        raise RuntimeError("Не удалось прочитать состав копии")
-    moves = []
-    data_i = 0
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", dbname) or "db"
-    for logical, kind in files:
-        if kind == "L":
-            ext = "_log.ldf"
-        elif data_i == 0:
-            ext = ".mdf"
-            data_i += 1
-        else:
-            ext = "_%d.ndf" % data_i
-            data_i += 1
-        dest = sql_dir + "\\" + safe + ext
-        moves.append("MOVE N'%s' TO N'%s'" % (logical.replace("'", "''"), dest.replace("'", "''")))
-    disk = remote.replace("'", "''")
-    batch = (
-        "IF DB_ID(N'%s') IS NOT NULL ALTER DATABASE [%s] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
-        "RESTORE DATABASE [%s] FROM DISK = N'%s' WITH %s, REPLACE, STATS = 10; "
-        "IF DB_ID(N'%s') IS NOT NULL ALTER DATABASE [%s] SET MULTI_USER;"
-    ) % (ident.replace("'", "''"), ident, ident, disk, ", ".join(moves), ident.replace("'", "''"), ident)
-    log("RESTORE DATABASE [%s]" % ident)
-    code, out = sql_exec(host, port, user, password, batch, timeout=7200)
-    if out:
-        log(out[-2000:])
-    if code != 0:
-        raise RuntimeError("RESTORE завершился с кодом %s" % code)
-    log("Восстановление завершено: %s на %s" % (dbname, host))
+                smb_del(job.get("smb_share") or "", job.get("smb_user") or "", job.get("smb_pass") or "", filename)
+            except Exception as e:
+                log("Не удалось удалить временный файл на сервере: %s" % e)
 
 def main():
     if len(sys.argv) > 2 and sys.argv[1] == "--restore":
+        req = sys.argv[2]
+        task_id = ""
         try:
-            with open(sys.argv[2], encoding="utf-8") as f:
+            with open(req, encoding="utf-8") as f:
                 job = json.load(f)
+            task_id = job.get("task_id") or ""
             restore_job(job)
             return 0
         except Exception as e:
             log("Ошибка восстановления: %s" % e)
+            set_status(running=False, task_id=task_id, percent=0, phase="error", message="Ошибка восстановления: %s" % e)
             return 1
+        finally:
+            remove_file(req)
     only = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
         with open(TASKS, encoding="utf-8") as f:

@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<title>MSSQL Backup</title>
+<title>Synology Microsoft SQL Backup & Restore</title>
 <style>
 :root { --blue:#0576e8; --blue-h:#0460c0; --bg:#f4f5f7; --line:#e5e7eb; --text:#2b2f33; --muted:#6b7280; }
 * { box-sizing:border-box; }
@@ -117,7 +117,7 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
     <div class="tasks" id="taskList"><div class="empty">Нет задач.<br>Нажмите + чтобы создать.</div></div>
   </aside>
   <section class="main">
-    <div class="top">MSSQL Backup</div>
+    <div class="top">Synology Microsoft SQL Backup & Restore</div>
     <div class="body" id="main">
       <div class="banner"><div class="badge">&#128190;</div><div><b>Задач ещё нет</b><div class="hint">Создайте задачу: подключение к SQL Server, выбор баз, папка на сервере и шара, откуда NAS заберёт файл .bak.</div></div></div>
     </div>
@@ -735,8 +735,15 @@ async function startRestore(){
     })});
     if (!d.ok) { msg.className="err"; msg.textContent=d.msg||"Ошибка"; return; }
     closeRestore();
-    alert(d.msg || "Запущено");
     if (selected) showTask(selected);
+    const box = document.getElementById("prog");
+    if (box) {
+      box.style.display = "block";
+      document.getElementById("progMsg").textContent = "Запуск восстановления";
+      document.getElementById("progPct").textContent = "0%";
+      document.getElementById("progBar").style.width = "2%";
+    }
+    refreshProgress();
   } catch(e) { msg.className="err"; msg.textContent=e.message; }
 }
 

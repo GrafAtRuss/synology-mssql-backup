@@ -14,9 +14,14 @@ html,body { margin:0; height:100%; font:13px/1.45 "Segoe UI", system-ui, Arial, 
 .tb button.primary { background:var(--blue); border-color:var(--blue); color:#fff; font-size:20px; font-weight:500; }
 .tb button:hover { filter:brightness(0.96); }
 .tasks { flex:1; overflow:auto; }
-.task { padding:10px 12px; border-bottom:1px solid #f2f3f5; cursor:pointer; display:flex; gap:8px; align-items:center; }
+.task { padding:10px 12px; border-bottom:1px solid #f2f3f5; cursor:pointer; display:flex; gap:10px; align-items:center; }
 .task.active, .task:hover { background:#e8f3fc; }
-.dot { width:8px; height:8px; border-radius:50%; background:#f5a623; flex:none; }
+.st { width:28px; height:28px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; box-sizing:border-box; }
+.st.never { background:#fff; border:2px solid #c5cad1; color:#9aa1a9; }
+.st.ok { background:#2eaa4b; color:#fff; }
+.st.bad { background:#e24b3b; color:#fff; }
+.st.run { background:#fff; border:3px solid #d6e8fb; border-top-color:#0576e8; color:transparent; animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
 .empty { color:var(--muted); text-align:center; padding:36px 16px; }
 .main { flex:1; display:flex; flex-direction:column; min-width:0; }
 .top { background:#fff; border-bottom:1px solid var(--line); padding:12px 16px; font-size:16px; font-weight:600; }
@@ -274,6 +279,8 @@ let tasks = [];
 let selected = null;
 let step = 1;
 let editing = null;
+let live = { running: false, task_id: "", phase: "" };
+let sawRun = false;
 
 function esc(s){
   return String(s==null?"":s).replace(/[&<>"']/g, function(c){
@@ -298,10 +305,31 @@ async function reloadAll(){
   }
 }
 
+function taskState(t){
+  if (live.running && String(live.task_id) === String(t.id)) return "run";
+  if (t.last_status === "ok") return "ok";
+  if (t.last_status === "error" || t.last_status === "run") return "bad";
+  return "never";
+}
+function stateTitle(t){
+  const s = taskState(t);
+  if (s === "run") return "Выполняется";
+  if (s === "ok") return "Готово без ошибок" + (t.last_run ? ", " + t.last_run : "");
+  if (s === "bad") return "Готово с ошибками" + (t.last_run ? ", " + t.last_run : "");
+  return "Не выполнялось";
+}
+function stateMark(s){
+  if (s === "ok") return "✓";
+  if (s === "bad") return "!";
+  return "";
+}
 function renderList(){
   const el = document.getElementById("taskList");
   if (!tasks.length){ el.innerHTML = '<div class="empty">Нет задач.<br>Нажмите + чтобы создать.</div>'; return; }
-  el.innerHTML = tasks.map(t => '<div class="task'+(t.id===selected?' active':'')+'" onclick="showTask(\''+esc(t.id)+'\')"><div class="dot"></div><div><b>'+esc(t.name||t.host)+'</b><div class="hint">'+esc(schedText(t))+'</div></div></div>').join('');
+  el.innerHTML = tasks.map(t => {
+    const s = taskState(t);
+    return '<div class="task'+(t.id===selected?' active':'')+'" onclick="showTask(\''+esc(t.id)+'\')"><span class="st '+s+'" title="'+esc(stateTitle(t))+'">'+stateMark(s)+'</span><div><b>'+esc(t.name||t.host)+'</b><div class="hint">'+esc(stateTitle(t))+'</div></div></div>';
+  }).join('');
 }
 
 function showTask(id){
@@ -317,7 +345,7 @@ function showTask(id){
     '<div class="grid"><div class="card"><h3>Источник</h3><div class="pad kv"><div>Хост</div><div>'+esc(t.host)+':'+esc(t.port)+'</div><div>Базы</div><div>'+esc((t.dbs||[]).join(", ")||"—")+'</div><div>Папка SQL</div><div>'+esc(t.sql_dir)+'</div></div></div>'+
     '<div class="card"><h3>Назначение</h3><div class="pad kv"><div>SMB</div><div>'+esc(t.smb_share||"—")+'</div><div>Папка NAS</div><div>'+esc(t.nas_dir)+'</div><div>Ротация</div><div>'+esc(rotText(t))+'</div><div>Расписание</div><div>'+esc(schedText(t))+'</div></div></div></div>'+
     '<pre class="log" id="log">Загрузка журнала…</pre>';
-  api("/api/logs").then(d => { const n=document.getElementById("log"); if(n) n.textContent = d.logs || "(пусто)"; }).catch(()=>{});
+  api("/api/logs?id="+encodeURIComponent(id)).then(d => { const n=document.getElementById("log"); if(n) n.textContent = d.logs || "(журнал этого задания пуст)"; }).catch(()=>{});
   refreshProgress();
 }
 
@@ -575,6 +603,7 @@ async function saveTask(){
   const smart = document.querySelector('input[name=rot]:checked').value === "smart";
   const passTyped = document.getElementById("w_pass").value;
   const smbTyped = document.getElementById("w_spass").value;
+  const prevTask = editing ? tasks.find(t => t.id===editing) : null;
   const task = {
     id: editing || String(Date.now()),
     name: document.getElementById("w_name").value || document.getElementById("w_host").value || "MSSQL",
@@ -597,7 +626,10 @@ async function saveTask(){
     until_min: Number(document.getElementById("w_until_m").value),
     rot_on: document.getElementById("rotOn").checked,
     rot_mode: smart ? "smart" : "count",
-    keep: Number((smart ? document.getElementById("w_keep_smart").value : document.getElementById("w_keep").value) || 30)
+    keep: Number((smart ? document.getElementById("w_keep_smart").value : document.getElementById("w_keep").value) || 30),
+    last_status: prevTask && prevTask.last_status || "",
+    last_run: prevTask && prevTask.last_run || "",
+    last_message: prevTask && prevTask.last_message || ""
   };
   const startNow = document.getElementById("runNowOn").checked;
   msg.className = "hint";
@@ -748,13 +780,28 @@ async function startRestore(){
 }
 
 async function refreshProgress(){
-  if (!selected) return;
   try {
     const d = await api("/api/status");
+    const stopped = sawRun && d && !d.running;
+    live = d || live;
+    sawRun = !!(d && d.running);
+    if (stopped) {
+      try {
+        const all = await api("/api/tasks");
+        tasks = all.tasks || tasks;
+      } catch(e) {}
+    }
+    renderList();
+    if (!selected) return;
     const box = document.getElementById("prog");
     if (!box) return;
     const mine = !d.task_id || String(d.task_id) === String(selected);
     const fresh = (Date.now()/1000 - (d.updated || 0)) < 1200;
+    if (d.running || stopped) {
+      const logs = await api("/api/logs?id="+encodeURIComponent(selected));
+      const n = document.getElementById("log");
+      if (n && logs.logs) { n.textContent = logs.logs; n.scrollTop = n.scrollHeight; }
+    }
     if (!mine || (!d.running && !fresh)) { box.style.display = "none"; return; }
     box.style.display = "block";
     const pct = Math.max(0, Math.min(100, Number(d.percent) || 0));
@@ -763,11 +810,6 @@ async function refreshProgress(){
     bar.className = "prog-bar" + (d.phase === "error" ? " err" : (d.phase === "done" && !d.running ? " ok" : ""));
     document.getElementById("progPct").textContent = pct + "%";
     document.getElementById("progMsg").textContent = d.message || (d.running ? "Выполняется" : "Готово");
-    if (d.running) {
-      const logs = await api("/api/logs");
-      const n = document.getElementById("log");
-      if (n && logs.logs) { n.textContent = logs.logs; n.scrollTop = n.scrollHeight; }
-    }
   } catch(e) {}
 }
 setInterval(refreshProgress, 2000);

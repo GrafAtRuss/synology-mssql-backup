@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, subprocess, datetime, re, glob, time, threading
+import json, os, subprocess, datetime, re, glob, time, threading, fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -35,10 +35,20 @@ def read_tasks():
         return []
 
 def write_tasks(tasks):
-    tmp = TASKS + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(tasks, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, TASKS)
+    lock_path = TASKS + ".lock"
+    with open(lock_path, "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        tmp = TASKS + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(tasks, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, TASKS)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+
+def task_log_path(task_id):
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id or ""))
+    if not safe:
+        return LOG
+    return os.path.join(VAR, "logs", safe + ".log")
 
 def browse(path):
     skip_prefix = ("@", ".", "#")
@@ -292,9 +302,12 @@ class H(BaseHTTPRequestHandler):
             self._send(200, {"tasks": safe, "sqlcmd": bool(sqlcmd_bin())})
             return
         if path == "/api/logs":
+            q = parse_qs(urlparse(self.path).query)
+            tid = (q.get("id") or [""])[0]
+            target = task_log_path(tid) if tid else LOG
             text = ""
-            if os.path.exists(LOG):
-                with open(LOG, encoding="utf-8", errors="replace") as f:
+            if os.path.exists(target):
+                with open(target, encoding="utf-8", errors="replace") as f:
                     text = f.read()[-30000:]
             self._send(200, {"logs": text})
             return
@@ -344,16 +357,26 @@ class H(BaseHTTPRequestHandler):
             if not isinstance(tasks, list):
                 self._send(400, {"error": "tasks required"})
                 return
-            prev = {t.get("id"): t for t in read_tasks()}
+            prev = {str(t.get("id")): t for t in read_tasks()}
             cleaned = []
             for t in tasks:
                 tid = str(t.get("id") or "")
-                if t.get("pass") == "********" and tid in prev:
-                    t["pass"] = prev[tid].get("pass", "")
-                if t.get("smb_pass") == "********" and tid in prev:
-                    t["smb_pass"] = prev[tid].get("smb_pass", "")
+                old = prev.get(tid) or {}
+                if t.get("pass") == "********" and old:
+                    t["pass"] = old.get("pass", "")
+                if t.get("smb_pass") == "********" and old:
+                    t["smb_pass"] = old.get("smb_pass", "")
+                for key in ("last_status", "last_run", "last_message"):
+                    if not t.get(key) and old.get(key):
+                        t[key] = old.get(key)
                 cleaned.append(t)
             write_tasks(cleaned)
+            gone = set(prev) - {str(t.get("id") or "") for t in cleaned}
+            for tid in gone:
+                try:
+                    os.remove(task_log_path(tid))
+                except OSError:
+                    pass
             self._send(200, {"ok": True, "schedule": "Расписание выполняет служба пакета. Планировщик DSM не нужен."})
             return
         if path == "/api/backup":

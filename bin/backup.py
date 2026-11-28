@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
-import json, os, sys, datetime, subprocess, re, time, threading
+import json, os, sys, datetime, subprocess, re, time, threading, fcntl
 
 VAR = "/var/packages/MSSQLBackup/var"
 TARGET = "/var/packages/MSSQLBackup/target"
 TASKS = os.path.join(VAR, "tasks.json")
 LOG = os.path.join(VAR, "backup.log")
+_log_path = LOG
+
+def task_log_path(task_id):
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(task_id or ""))
+    if not safe:
+        return LOG
+    folder = os.path.join(VAR, "logs")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, safe + ".log")
+
+def use_log(task_id):
+    global _log_path
+    _log_path = task_log_path(task_id)
 def sqlcmd_bin():
     arch = os.uname().machine
     name = "sqlcmd-linux-arm64" if arch in ("aarch64", "arm64") else "sqlcmd-linux-amd64"
@@ -44,8 +57,42 @@ def log(msg):
     line = "%s %s" % (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg)
     print(line, flush=True)
     try:
-        with open(LOG, "a", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(_log_path), exist_ok=True)
+        with open(_log_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+    except Exception:
+        pass
+
+def update_task_result(task_id, status, message=""):
+    if not task_id:
+        return
+    lock_path = TASKS + ".lock"
+    try:
+        os.makedirs(VAR, exist_ok=True)
+        with open(lock_path, "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                with open(TASKS, encoding="utf-8") as f:
+                    tasks = json.load(f)
+            except Exception:
+                return
+            if not isinstance(tasks, list):
+                return
+            found = False
+            for t in tasks:
+                if str(t.get("id")) == str(task_id):
+                    t["last_status"] = status
+                    t["last_run"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    t["last_message"] = (message or "")[:300]
+                    found = True
+                    break
+            if not found:
+                return
+            tmp = TASKS + ".run.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(tasks, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, TASKS)
+            fcntl.flock(lock, fcntl.LOCK_UN)
     except Exception:
         pass
 
@@ -411,6 +458,8 @@ def restore_job(job):
 
     try:
         progress(2, "prepare", "Подготовка восстановления %s" % dbname)
+        use_log(task_id)
+        update_task_result(task_id, "run", "Восстановление")
         log("=== Восстановление %s на %s ===" % (os.path.basename(bak), host))
         progress(8, "unpack", "Распаковка архива")
         def on_unpack(size):
@@ -480,6 +529,7 @@ def restore_job(job):
             uploaded = False
         set_status(running=False, task_id=task_id, db=dbname, percent=100, phase="done",
                    message="Восстановление завершено: %s" % dbname)
+        update_task_result(task_id, "ok", "Восстановление завершено")
     finally:
         if temporary:
             remove_file(local)
@@ -497,10 +547,12 @@ def main():
             with open(req, encoding="utf-8") as f:
                 job = json.load(f)
             task_id = job.get("task_id") or ""
+            use_log(task_id)
             restore_job(job)
             return 0
         except Exception as e:
             log("Ошибка восстановления: %s" % e)
+            update_task_result(task_id, "error", "Ошибка восстановления: %s" % e)
             set_status(running=False, task_id=task_id, percent=0, phase="error", message="Ошибка восстановления: %s" % e)
             return 1
         finally:
@@ -518,16 +570,29 @@ def main():
             continue
         name = task.get("name") or task.get("host") or "task"
         dbs = task.get("dbs") or []
+        use_log(task.get("id"))
         log("=== Задача %s ===" % name)
+        update_task_result(task.get("id"), "run", "Выполняется")
         set_status(running=True, task_id=task.get("id"), percent=0, phase="start", message="Запуск «%s»" % name)
+        task_rc = 0
+        if not dbs:
+            task_rc = 1
+            log("В задаче нет баз")
         for i, db in enumerate(dbs):
             try:
                 backup_one(task, db, i, len(dbs) or 1)
             except Exception as e:
-                rc = 1
+                task_rc = 1
                 log("Ошибка %s: %s" % (db, e))
-    set_status(running=False, task_id=only, percent=0 if rc else 100, phase="error" if rc else "done", message="Завершено с ошибкой" if rc else "Готово")
-    log("Готово")
+        if task_rc:
+            rc = 1
+            log("Готово с ошибками")
+            update_task_result(task.get("id"), "error", "Готово с ошибками")
+            set_status(running=False, task_id=task.get("id"), percent=100, phase="error", message="Готово с ошибками")
+        else:
+            log("Готово без ошибок")
+            update_task_result(task.get("id"), "ok", "Готово без ошибок")
+            set_status(running=False, task_id=task.get("id"), percent=100, phase="done", message="Готово без ошибок")
     return rc
 
 if __name__ == "__main__":

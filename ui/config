@@ -2,7 +2,7 @@
     "Main.js": {
         "SYNO.SDS.MSSQLBackup.Instance": {
             "type": "app",
-            "version": "1.24.12",
+            "version": "1.24.13",
             "title": "Synology Microsoft SQL Backup & Restore",
             "desc": "Резервное копирование MSSQL",
             "icon": "images/icon_{0}.png",

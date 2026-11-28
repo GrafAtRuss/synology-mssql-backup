@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json, os, subprocess, datetime, re, glob, time, threading, fcntl
+import lic
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -179,8 +180,16 @@ def task_due(task, now):
 
 def scheduler_loop():
     last_file = os.path.join(VAR, "lastrun.json")
+    next_license = 0
     while True:
         time.sleep(20)
+        try:
+            if time.time() >= next_license:
+                lic.refresh(False)
+                next_license = time.time() + 3600
+        except Exception as e:
+            log("license: %s" % e)
+            next_license = time.time() + 3600
         try:
             now = datetime.datetime.now()
             slot = now.strftime("%Y%m%d%H%M")
@@ -336,11 +345,17 @@ class H(BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             self._send(200, list_versions((q.get("dir") or [""])[0], (q.get("db") or [""])[0]))
             return
+        if path == "/api/license":
+            self._send(200, lic.refresh(False))
+            return
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
         path = urlparse(self.path).path
         data = self._body()
+        if path == "/api/license":
+            self._send(200, lic.refresh(True, data.get("key")))
+            return
         if path == "/api/list_dbs":
             code, out, err = run_sql(
                 data.get("host", ""), data.get("port", "1433"),
@@ -358,6 +373,10 @@ class H(BaseHTTPRequestHandler):
                 self._send(400, {"error": "tasks required"})
                 return
             prev = {str(t.get("id")): t for t in read_tasks()}
+            allowed, why = lic.allows_task_list(tasks, list(prev.values()))
+            if not allowed:
+                self._send(200, {"ok": False, "msg": why})
+                return
             cleaned = []
             for t in tasks:
                 tid = str(t.get("id") or "")

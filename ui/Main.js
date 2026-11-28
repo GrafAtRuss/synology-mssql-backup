@@ -20,6 +20,7 @@ Ext.define('SYNO.SDS.MSSQLBackup.Main', {
             minWidth: 780,
             minHeight: 480,
             layout: 'fit',
+            help: 'MSSQLBackup/help/index.html',
             items: [
                 new Ext.BoxComponent({
                     height: '100%',
@@ -28,5 +29,20 @@ Ext.define('SYNO.SDS.MSSQLBackup.Main', {
             ]
         }, cfg);
         this.callParent([config]);
+        this.onClickHelp = function () {
+            var url = '/webman/3rdparty/MSSQLBackup/help/index.html';
+            var helpWin = new SYNO.SDS.ModalWindow({
+                title: 'Справка — Synology Microsoft SQL Backup & Restore',
+                width: 960,
+                height: 700,
+                resizable: true,
+                maximizable: true,
+                layout: 'fit',
+                items: [new Ext.BoxComponent({
+                    html: '<iframe title="Справка" src="' + url + '" style="border:0;width:100%;height:100%;background:#fff"></iframe>'
+                })]
+            });
+            helpWin.show();
+        };
     }
 });

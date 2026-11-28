@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Справка — Synology Microsoft SQL Backup & Restore</title>
+<style>
+body { margin:0; font:14px/1.5 "Segoe UI", system-ui, Arial, sans-serif; color:#2b2f33; background:#fff; }
+.wrap { display:flex; min-height:100vh; }
+nav { width:240px; flex:none; background:#f7f8fa; border-right:1px solid #e5e7eb; padding:16px 0; position:sticky; top:0; height:100vh; overflow:auto; }
+nav b { display:block; padding:0 18px 10px; color:#0576e8; font-size:13px; }
+nav a { display:block; padding:7px 18px; color:#2b2f33; text-decoration:none; }
+nav a:hover { background:#e8f3fc; }
+main { padding:28px 40px 60px; max-width:820px; }
+h1 { font-size:22px; margin:0 0 8px; }
+h2 { font-size:18px; margin:28px 0 8px; padding-top:8px; border-top:1px solid #eee; }
+p, li { margin:6px 0; }
+ol, ul { padding-left:20px; }
+.note { background:#f5faff; border:1px solid #d6e8fb; border-radius:4px; padding:10px 12px; margin:12px 0; }
+code { background:#f3f4f6; padding:1px 4px; border-radius:3px; }
+table { border-collapse:collapse; width:100%; margin:8px 0 14px; }
+th, td { border:1px solid #e5e7eb; padding:6px 8px; text-align:left; vertical-align:top; }
+th { background:#f7f8fa; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <b>Synology Microsoft SQL Backup & Restore</b>
+  <a href="#about">О программе</a>
+  <a href="#before">Перед началом</a>
+  <a href="#task">Создание задания</a>
+  <a href="#run">Запуск и ход</a>
+  <a href="#status">Значок статуса</a>
+  <a href="#log">Журнал</a>
+  <a href="#restore">Восстановление</a>
+  <a href="#license">Лицензия</a>
+  <a href="#helpbtn">Эта справка</a>
+</nav>
+<main>
+<h1>Synology Microsoft SQL Backup & Restore</h1>
+<p>Резервное копирование баз Microsoft SQL Server на NAS и восстановление из этих копий. Автор: Ермаков Алексей Сергеевич, ИП Ермаков А.С.</p>
+
+<h2 id="about">О программе</h2>
+<p>Задание подключается к Microsoft SQL Server, выполняет <code>BACKUP DATABASE</code> в папку на этом сервере, забирает файл по SMB на NAS и хранит его в виде архива <code>.bak.gz</code>. Расписание выполняет сам пакет, Планировщик DSM не нужен.</p>
+
+<h2 id="before">Перед началом</h2>
+<ul>
+  <li>На Microsoft SQL Server создайте папку для копий, например <code>D:\SQLBackups</code>. Учётная запись службы SQL Server должна иметь право записи в эту папку.</li>
+  <li>Откройте эту папку как общую SMB-папку. NAS забирает и отдаёт файл только по SMB: SQL Server не принимает путь вида <code>\\NAS\share</code> в команде BACKUP.</li>
+  <li>Для входа в SQL используйте проверку подлинности SQL Server, не только Windows.</li>
+  <li>Пакет слушает порт 8088 на NAS. Если окно пустое, разрешите этот порт в брандмауэре DSM.</li>
+</ul>
+
+<h2 id="task">Создание задания</h2>
+<p>Нажмите <b>+</b>. Мастер состоит из пяти шагов, как у Hyper Backup.</p>
+<ol>
+  <li><b>Подключение.</b> Имя задания, адрес Microsoft SQL Server, порт (обычно 1433), пользователь и пароль. Кнопка «Проверить подключение» читает список баз.</li>
+  <li><b>Базы и хранение.</b> Отметьте базы. Укажите папку на SQL Server и SMB-шару этой же папки (<code>\\сервер\share</code>), пользователя и пароль SMB. Папку на NAS выберите в дереве тома; новую папку можно создать здесь же.</li>
+  <li><b>Расписание.</b> Дни недели, время начала, повтор в течение дня и время окончания. Расписание можно выключить.</li>
+  <li><b>Ротация.</b> По числу копий или Smart Recycle: почасовые за сутки, ежедневные за месяц, еженедельные старше месяца, не больше заданного числа версий.</li>
+  <li><b>Запуск.</b> Отметьте, нужно ли выполнить копирование сразу после сохранения.</li>
+</ol>
+<p>Готовое задание меняется кнопкой <b>Изменить</b>. Пароли можно не вводить повторно. Удаление задания не удаляет уже лежащие на NAS архивы.</p>
+
+<h2 id="run">Запуск и ход</h2>
+<p>Кнопка <b>Резервировать сейчас</b> запускает выбранное задание. Шкала показывает подготовку, процент BACKUP, копирование на NAS и архивацию. После успешного копирования временный <code>.bak</code> на SQL Server удаляется. На NAS остаётся <code>.bak.gz</code>.</p>
+
+<h2 id="status">Значок статуса</h2>
+<table>
+  <tr><th>Значок</th><th>Значение</th></tr>
+  <tr><td>Серый круг</td><td>Задание ещё не выполнялось</td></tr>
+  <tr><td>Синее кольцо</td><td>Выполняется</td></tr>
+  <tr><td>Зелёная галочка</td><td>Последний запуск завершился без ошибок</td></tr>
+  <tr><td>Красный круг</td><td>Последний запуск завершился с ошибками</td></tr>
+</table>
+
+<h2 id="log">Журнал</h2>
+<p>У каждого задания свой журнал. Внизу карточки видны только его строки. Общий журнал всех заданий не смешивается.</p>
+
+<h2 id="restore">Восстановление</h2>
+<ol>
+  <li>Выберите задание и нажмите кнопку восстановления.</li>
+  <li>Выберите базу этого задания и дату копии. В списке даты, а не имена файлов.</li>
+  <li>Сервер, порт, пользователь, пароль, папка и SMB подставляются из задания. Любое поле можно изменить, в том числе указать другой Microsoft SQL Server.</li>
+  <li>Имя базы на сервере назначения тоже можно изменить.</li>
+</ol>
+<p>Архив распаковывается рядом с копией на томе, передаётся по SMB и восстанавливается командой <code>RESTORE DATABASE</code>. Ход виден на той же шкале. Временные файлы после работы удаляются.</p>
+<div class="note">Служба SQL Server на машине назначения должна иметь право создавать файлы базы в указанной папке.</div>
+
+<h2 id="license">Лицензия</h2>
+<p>Серийный номер NAS пакет читает сам из DSM. Вводить его не нужно.</p>
+<p>Без активации можно создать <b>только одно</b> задание. Уже созданные задания продолжают выполняться по расписанию. Второе задание появится после активации.</p>
+<p>Ключ выпускается в компоненте «Лицензии приложений» на сайте <a href="https://ип-ермаков.рф">ип-ермаков.рф</a>. У ключа должно быть приложение с кодовым именем <code>mssqlbackup</code>. Кнопка <b>Лицензия</b> в окне пакета отправляет ключ и серийный номер DSM на сайт.</p>
+<p>Пакет спрашивает сайт <b>не чаще одного раза в час</b>. Если интернета нет или сайт не открывается, уже активированная лицензия <b>не отключается</b>. Лицензия снимается только когда сайт явно ответил, что ключ отозван, просрочен, не найден или привязан к другому серийному номеру.</p>
+
+<h2 id="helpbtn">Эта справка</h2>
+<p>Справка открывается кнопкой <b>?</b> в заголовке окна приложения.</p>
+<p>Поддержка: <a href="mailto:info@ip-ermakov.ru">info@ip-ermakov.ru</a>, +7-991-866-1848, <a href="https://ип-ермаков.рф">ип-ермаков.рф</a>.</p>
+</main>
+</div>
+</body>
+</html>

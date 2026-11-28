@@ -116,6 +116,7 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
       <button class="primary" title="Создать" onclick="openWiz()">+</button>
       <button title="Восстановить на Microsoft SQL Server" onclick="openRestore()">&#8617;</button>
       <button title="Удалить задачу" onclick="deleteTask()">&#10005;</button>
+      <button title="Лицензия" onclick="openLicense()">&#128273;</button>
       <button title="Обновить" onclick="reloadAll()">&#8635;</button>
       <button title="Проверить sqlcmd" onclick="installSql()">&#8681;</button>
     </div>
@@ -126,7 +127,7 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
     <div class="body" id="main">
       <div class="banner"><div class="badge">&#128190;</div><div><b>Задач ещё нет</b><div class="hint">Создайте задачу: подключение к SQL Server, выбор баз, папка на сервере и шара, откуда NAS заберёт файл .bak.</div></div></div>
     </div>
-    <div class="foot">Автор: Ермаков Алексей Сергеевич · ИП Ермаков А.С. · <a href="https://ип-ермаков.рф" target="_blank">ип-ермаков.рф</a> · info@ip-ermakov.ru · +7-991-866-1848</div>
+    <div class="foot">Автор: Ермаков Алексей Сергеевич · ИП Ермаков А.С. · <a href="https://ип-ермаков.рф" target="_blank">ип-ермаков.рф</a> · info@ip-ermakov.ru · +7-991-866-1848 · <a href="#" onclick="openLicense(); return false;" id="licFoot">Лицензия</a></div>
   </section>
 </div>
 
@@ -273,6 +274,22 @@ input[type=checkbox] { width:16px; height:16px; max-width:16px; padding:0; margi
   </div>
 </div>
 
+<div class="mask" id="lmask">
+  <div class="wiz" style="width:520px">
+    <h2>Лицензия<button onclick="closeLicense()">×</button></h2>
+    <div class="inner">
+      <label>Серийный номер DSM</label><input id="lic_serial" readonly>
+      <label>Лицензионный ключ</label><input id="lic_key" placeholder="APPL-...." autocomplete="off">
+      <div id="licMsg" class="hint"></div>
+      <div class="hint">Без активации можно создать одно задание. Проверка на ип-ермаков.рф — раз в час. Если сайта нет, уже активированная лицензия сохраняется. В компоненте «Лицензии приложений» ключ должен быть для приложения <b>mssqlbackup</b>.</div>
+    </div>
+    <div class="actions">
+      <button class="btn sec" type="button" onclick="closeLicense()">Закрыть</button>
+      <button class="btn" type="button" onclick="activateLicense()">Активировать</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = location.protocol + "//" + location.hostname + ":8088";
 let tasks = [];
@@ -281,6 +298,7 @@ let step = 1;
 let editing = null;
 let live = { running: false, task_id: "", phase: "" };
 let sawRun = false;
+let lic = { activated: false, limited: true, serial: "", message: "" };
 
 function esc(s){
   return String(s==null?"":s).replace(/[&<>"']/g, function(c){
@@ -298,6 +316,8 @@ async function reloadAll(){
   try {
     const d = await api("/api/tasks");
     tasks = d.tasks || [];
+    try { lic = await api("/api/license"); } catch (e) {}
+    paintLicense();
     renderList();
     if (selected) showTask(selected);
   } catch(e) {
@@ -354,7 +374,40 @@ function editTask(){
   if (!t) { alert("Сначала выберите задачу"); return; }
   openWiz(t);
 }
+function paintLicense(){
+  const foot = document.getElementById("licFoot");
+  if (foot) foot.textContent = lic.activated ? "Лицензия активна" : "Лицензия не активирована";
+}
+function closeLicense(){ document.getElementById("lmask").classList.remove("on"); }
+function openLicense(){
+  document.getElementById("lic_serial").value = lic.serial || "";
+  document.getElementById("lic_key").value = "";
+  const msg = document.getElementById("licMsg");
+  msg.className = lic.activated ? "hint" : "err";
+  msg.textContent = lic.message || "";
+  document.getElementById("lmask").classList.add("on");
+}
+async function activateLicense(){
+  const msg = document.getElementById("licMsg");
+  msg.className = "hint";
+  msg.textContent = "Проверка…";
+  try {
+    lic = await api("/api/license", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({key: document.getElementById("lic_key").value})});
+    document.getElementById("lic_serial").value = lic.serial || "";
+    msg.className = lic.activated ? "hint" : "err";
+    msg.textContent = lic.message || "";
+    paintLicense();
+  } catch(e) {
+    msg.className = "err";
+    msg.textContent = e.message;
+  }
+}
 function openWiz(src){
+  if (!src && !lic.activated && tasks.length >= 1) {
+    alert("Без активации можно создать только одно задание.");
+    openLicense();
+    return;
+  }
   editing = src ? src.id : null;
   step = 1;
   document.getElementById("w_name").value = src ? (src.name || "") : "";
@@ -637,6 +690,7 @@ async function saveTask(){
   try {
     const all = editing ? tasks.map(t => t.id===editing ? task : t) : tasks.concat([task]);
     const d = await api("/api/tasks", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({tasks: all})});
+    if (d.ok === false) { msg.className="err"; msg.textContent = d.msg || "Лицензия не позволяет создать ещё одно задание"; openLicense(); return; }
     msg.textContent = d.schedule || "Сохранено";
     closeWiz();
     await reloadAll();
